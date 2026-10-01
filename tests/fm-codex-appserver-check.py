@@ -42,7 +42,7 @@ for line in sys.stdin:
   elif mode=='bad-turn':event('turn/completed',{'turn':[]})
   elif mode=='bad-response':emit({'id':'foreign','result':{}})
   elif mode=='oversized':print('x'*1048577,flush=True)
-  elif mode in ('decision','decision-death','decision-cancel','decision-backend-death'):
+  elif mode in ('decision','decision-large','decision-death','decision-cancel','decision-backend-death','interrupt-error','interrupt-timeout'):
    tool('needs-decision')
    if mode=='decision-backend-death':threading.Timer(2,lambda:os._exit(3)).start()
   elif mode=='wrong-thread':tool(thread='sibling')
@@ -60,14 +60,17 @@ for line in sys.stdin:
   assert p['threadId']=='thread' and p['expectedTurnId']=='turn'
   emit({'id':ident,'result':{'turnId':'turn'}})
  elif method=='turn/interrupt':
+  if mode=='interrupt-error':
+   emit({'id':ident,'error':{'code':-1,'message':'interrupt rejected'}});continue
+  if mode=='interrupt-timeout':continue
   emit({'id':ident,'result':{}}); terminal('interrupted')
  elif method is None and ident==100:
   if mode in ('wrong-thread','wrong-turn','sibling','unknown','bad-report','large-report','bad-shape','unknown-tool'):
    assert m['result']['success'] is False
    terminal('completed')
   elif mode=='working':pass
-  elif mode=='decision':
-   assert m['result']['contentItems'][0]['text']=='ANSWER'
+  elif mode in ('decision','decision-large'):
+   assert m['result']['contentItems'][0]['text']==('😀'*2048 if mode=='decision-large' else 'ANSWER')
    tool('result',ident=101)
   elif mode in ('result-active','stale'):pass
   elif mode=='failed':terminal('failed')
@@ -97,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
     env = dict(os.environ, PATH=str(fakebin)+':'+os.environ['PATH'])
     for case in ['working','success','failed','interrupted','result-active','success-no-result',
                  'wrong-thread','wrong-turn','sibling','unknown','bad-report','malformed','death',
-                 'decision','decision-death','decision-cancel','decision-backend-death','stale',
+                 'decision','decision-large','decision-death','decision-cancel','decision-backend-death','interrupt-error','interrupt-timeout','stale',
                  'duplicate-request','bad-json','bad-params','bad-turn','bad-response','oversized','large-report','bad-shape','unknown-tool']:
         home = top / case
         state = home / 's'
@@ -130,7 +133,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
                 assert proc.returncode != 0
                 assert 'state=unknown' in busy.read_text()
                 assert 'done' not in statuses()
-            elif case in ('decision','decision-death','decision-cancel','decision-backend-death'):
+            elif case in ('decision','decision-large','decision-death','decision-cancel','decision-backend-death','interrupt-error','interrupt-timeout'):
                 wait(lambda:'needs-decision' in statuses(),'decision opened')
                 key=statuses().split('[key=')[1].split(']')[0]
                 assert control('steer','no').returncode != 0
@@ -138,8 +141,10 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
                 assert control('answer','ANSWER','wrong-key').returncode != 0
                 assert not 'done:' in statuses()
                 assert 'state: parked' in crew()
-                if case=='decision':
-                    assert send('ANSWER',key).returncode==0
+                if case in ('decision','decision-large'):
+                    answer='😀'*2048 if case=='decision-large' else 'ANSWER'
+                    reply=send(answer,key)
+                    assert reply.returncode==0, reply.stderr+reply.stdout
                     assert control('answer','ANSWER',key).returncode!=0
                     assert 'resolved [key=' in statuses()
                     wait(lambda:'turn-completed' in busy.read_text(),'same-turn result')
@@ -153,6 +158,17 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
                     assert 'resolved [key=' in statuses()
                     assert 'state: done' not in crew()
                     assert control('answer','ANSWER',key).returncode!=0
+                elif case.startswith('interrupt-'):
+                    started=time.monotonic()
+                    assert control('interrupt').returncode!=0
+                    proc.wait(timeout=20)
+                    assert time.monotonic()-started < 55
+                    assert 'state=unknown' in busy.read_text()
+                    assert 'interrupt-unverified' in busy.read_text()
+                    assert 'resolved [key=' in statuses()
+                    assert 'done:' not in statuses()
+                    assert control('answer','ANSWER',key).returncode!=0
+                    assert 'state: done' not in crew()
                 else:
                     assert control('interrupt').returncode==0
                     proc.wait(timeout=15)
@@ -168,6 +184,10 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
                     assert 'source=fm-spawn' in busy.read_text()
                 else:
                     assert 'state: working' in crew()
+                    for text in ('x'*8192, '\x01'*8192, '"'*8192, '\\'*8192, '\U0001f600'*2048):
+                        response=control('steer',text)
+                        assert response.returncode==0, response.stderr+response.stdout
+                    assert control('steer','x'*8193).returncode!=0
                     reply = send('steer')
                     assert reply.returncode==0, reply.stderr+reply.stdout
                     assert 'done' not in statuses()
@@ -185,6 +205,14 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
             if proc.poll() is None:
                 assert control('exit').returncode==0
                 proc.wait(timeout=15)
+            output=(home/'output').read_text()
+            server_pid=int(output.split('app-server started pid=')[1].splitlines()[0])
+            try:
+                os.kill(server_pid,0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise AssertionError('orphan app-server peer')
             assert not list(state.glob('*.sock'))
             assert (state/'sibling.status').read_text()=='PRESERVE'
             print('ok - appserver '+case,flush=True)

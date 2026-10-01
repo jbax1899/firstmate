@@ -22,6 +22,9 @@ import time
 
 BIN = Path(__file__).resolve().parent
 LIMIT = 8192
+# JSON can encode each accepted input byte as a six-byte escape. Include
+# bounded supervisor identity fields and framing in the transport budget.
+CONTROL_LIMIT = 6 * LIMIT + 4096
 TOKEN = re.compile(r"[A-Za-z0-9._-]{1,160}\Z")
 TOOL = {"type": "function", "name": "firstmate_report",
         "description": "Report to FirstMate. needs-decision waits for the supervisor's answer in this same turn. result is delivery evidence, not terminal success.",
@@ -167,6 +170,8 @@ class Adapter:
             raise ValueError("duplicate or malformed request identity")
         try:
             self.correlate(p)
+            if self.stopping:
+                raise ValueError("worker is stopping")
             if p.get("tool") != "firstmate_report" or p.get("namespace") not in (None, ""):
                 raise ValueError("unknown tool")
             call = p.get("callId")
@@ -298,16 +303,30 @@ class Adapter:
                 raise ValueError("steer turn mismatch")
             return "steered " + self.turn
         if op in ("interrupt", "exit"):
-            if self.active:
-                self.rpc("turn/interrupt", {"threadId": self.thread, "turnId": self.turn})
-                deadline = time.monotonic() + 15
-                while self.active and time.monotonic() < deadline:
-                    self.pump(.1)
-                if self.active:
-                    raise TimeoutError("interrupt terminal event missing")
-            self.pending = None
             self.stopping = True
-            self.shutdown()
+            try:
+                # Retire callback ownership before pumping further protocol
+                # events, and prevent a racing completion from using a result.
+                self.result = None
+                self.retire_pending()
+                if self.active:
+                    self.rpc("turn/interrupt", {"threadId": self.thread, "turnId": self.turn})
+                    deadline = time.monotonic() + 15
+                    while self.active and time.monotonic() < deadline:
+                        self.pump(.1)
+                    if self.active:
+                        raise TimeoutError("interrupt terminal event missing")
+            except (ValueError, OSError, EOFError, TimeoutError, subprocess.SubprocessError):
+                self.active = False
+                self.result = None
+                try:
+                    self.report("failed: app-server cancellation was not verified")
+                finally:
+                    self.busy("unknown", "interrupt-unverified")
+                raise
+            finally:
+                self.pending = None
+                self.shutdown()
             return "stopped app-server pid=" + str(self.proc.pid) + " exit=" + str(self.proc.returncode)
         raise ValueError("unknown control operation")
 
@@ -321,12 +340,14 @@ class Adapter:
             try:
                 data = b""
                 while not data.endswith(b"\n"):
-                    chunk = conn.recv(LIMIT + 1024 - len(data))
-                    if not chunk or len(data) >= LIMIT + 1024:
+                    chunk = conn.recv(CONTROL_LIMIT + 1 - len(data))
+                    if not chunk:
                         raise ValueError("invalid control framing")
                     data += chunk
+                    if len(data) > CONTROL_LIMIT:
+                        raise ValueError("invalid control framing")
                 result = {"ok": True, "message": self.command(json.loads(data))}
-            except (ValueError, TimeoutError, OSError) as exc:
+            except (ValueError, TimeoutError, OSError, EOFError, subprocess.SubprocessError) as exc:
                 result = {"ok": False, "message": str(exc)}
             try:
                 conn.sendall(json.dumps(result).encode() + b"\n")
@@ -338,7 +359,8 @@ class Adapter:
         if self.proc is None:
             return
         if self.proc.stdin and not self.proc.stdin.closed:
-            self.proc.stdin.close()
+            with contextlib.suppress(OSError):
+                self.proc.stdin.close()
         try:
             self.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
@@ -434,10 +456,13 @@ def main():
         if len(text.encode()) > LIMIT:
             raise ValueError("control too large")
         with socket.socket(socket.AF_UNIX) as conn:
-            conn.settimeout(50)
+            conn.settimeout(65)
             conn.connect(str(socket_path(state.resolve(), task, gen)))
-            conn.sendall(json.dumps({"generation": gen, "operation": args[0],
-                "key": args[1] if len(args) > 1 else "", "text": text}).encode() + b"\n")
+            frame = json.dumps({"generation": gen, "operation": args[0],
+                "key": args[1] if len(args) > 1 else "", "text": text}).encode() + b"\n"
+            if len(frame) > CONTROL_LIMIT:
+                raise ValueError("control frame too large")
+            conn.sendall(frame)
             result = json.loads(conn.makefile().readline(LIMIT))
             print(result["message"])
             if not result["ok"]:
