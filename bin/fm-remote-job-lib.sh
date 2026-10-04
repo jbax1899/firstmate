@@ -113,6 +113,8 @@ FM_REMOTE_JOB_CHILD_PATH=
 FM_REMOTE_JOB_STATE=
 FM_REMOTE_JOB_JOBS=
 FM_REMOTE_JOB_SEQ_CLAIMS=
+# Host uname for stat(1) syntax; resolved once in fm_remote_job_path_mtime.
+FM_REMOTE_JOB_HOST_UNAME=
 FM_REMOTE_JOB_ID=
 FM_REMOTE_JOB_STDOUT=
 FM_REMOTE_JOB_STDERR=
@@ -801,8 +803,16 @@ fm_remote_job_reap() { # <account-home> <id>; only removes an exact completed re
 
 fm_remote_job_path_mtime() { # <path>
   # The platform override controls worker shape in isolated tests, not the host
-  # kernel's stat syntax.
-  if [ "$(uname -s 2>/dev/null || true)" = Darwin ]; then /usr/bin/stat -f %m "$1" 2>/dev/null; else stat -c %Y "$1" 2>/dev/null; fi
+  # kernel's stat syntax. Resolve that host once per process so a sweep never
+  # forks uname once per path.
+  if [ -z "${FM_REMOTE_JOB_HOST_UNAME:-}" ]; then
+    FM_REMOTE_JOB_HOST_UNAME=$(uname -s 2>/dev/null || true)
+  fi
+  if [ "$FM_REMOTE_JOB_HOST_UNAME" = Darwin ]; then
+    /usr/bin/stat -f %m "$1" 2>/dev/null
+  else
+    stat -c %Y "$1" 2>/dev/null
+  fi
 }
 
 fm_remote_job_stage_owner_alive() { # <stage-dir>
@@ -816,7 +826,8 @@ fm_remote_job_stage_owner_alive() { # <stage-dir>
 }
 
 fm_remote_job_reap_stale() { # <account-home>
-  local account_home=$1 job id state mtime now stage claim value marker tmp reap_claims=0
+  local account_home=$1 job id state mtime now stage marker tmp reap_claims=0
+  local cutoff stamp ref
   fm_remote_job_prepare_state "$account_home" || return 1
   now=$(date +%s)
   for job in "$FM_REMOTE_JOB_JOBS"/job-*; do
@@ -837,21 +848,37 @@ fm_remote_job_reap_stale() { # <account-home>
     *) [ $((now - mtime)) -lt "$FM_REMOTE_JOB_SEQ_CLAIM_REAP_INTERVAL" ] || reap_claims=1 ;;
   esac
   if [ "$reap_claims" -eq 1 ]; then
-    tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.seqreap.XXXXXX") || tmp=
-    if [ -n "$tmp" ] && printf '%s\n' "$now" > "$tmp" && chmod 600 "$tmp" \
-      && mv -f -- "$tmp" "$marker"; then
-      for claim in "$FM_REMOTE_JOB_SEQ_CLAIMS"/*; do
-        [ -d "$claim" ] && [ ! -L "$claim" ] || continue
-        value=${claim##*/}
-        case "$value" in ''|*[!0-9]*|0) continue ;; esac
-        mtime=$(fm_remote_job_path_mtime "$claim" 2>/dev/null || true)
-        case "$mtime" in ''|*[!0-9]*) continue ;; esac
-        [ $((now - mtime)) -ge "$FM_REMOTE_JOB_SEQ_CLAIM_REAP_SECONDS" ] || continue
-        rmdir "$claim" 2>/dev/null || true
-      done
-    else
-      [ -z "$tmp" ] || rm -f -- "$tmp"
+    # Prepare the age beacon before advancing the marker so a touch/date failure
+    # retries on the next sweep instead of skipping a whole interval.
+    ref=
+    stamp=
+    if [ -d "$FM_REMOTE_JOB_SEQ_CLAIMS" ] && [ ! -L "$FM_REMOTE_JOB_SEQ_CLAIMS" ]; then
+      cutoff=$((now - FM_REMOTE_JOB_SEQ_CLAIM_REAP_SECONDS))
+      ref=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.seqreap-ref.XXXXXX") || ref=
+      if [ -n "$ref" ]; then
+        # touch -t is POSIX; date(1) needs a host-specific epoch conversion.
+        stamp=$(TZ=UTC0 date -d "@$cutoff" +%Y%m%d%H%M.%S 2>/dev/null) \
+          || stamp=$(TZ=UTC0 date -r "$cutoff" +%Y%m%d%H%M.%S 2>/dev/null) \
+          || stamp=
+        if [ -n "$stamp" ]; then
+          TZ=UTC0 touch -t "$stamp" "$ref" 2>/dev/null || stamp=
+        fi
+      fi
     fi
+    if [ -n "$stamp" ]; then
+      tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.seqreap.XXXXXX") || tmp=
+      if [ -n "$tmp" ] && printf '%s\n' "$now" > "$tmp" && chmod 600 "$tmp" \
+        && mv -f -- "$tmp" "$marker"; then
+        # One directory walk: ! -newer matches mtime <= cutoff (the former
+        # >= age check). Batched rmdir tolerates concurrent mkdir/rmdir races
+        # and non-empty dirs the same way the old per-claim rmdir || true did.
+        find "$FM_REMOTE_JOB_SEQ_CLAIMS" -mindepth 1 -maxdepth 1 -type d \
+          ! -newer "$ref" -exec rmdir {} + 2>/dev/null || true
+      else
+        [ -z "$tmp" ] || rm -f -- "$tmp"
+      fi
+    fi
+    [ -z "$ref" ] || rm -f -- "$ref"
   fi
   # Staging litter a killed caller left behind is reaped after its owner is no
   # longer the process that created it and the stage has exceeded the age bound.
