@@ -18,8 +18,10 @@
 # counter is only a forward-moving allocation hint. If the bounded hint walk
 # is exhausted, allocation rescans the claims for the maximum and continues
 # above it. Expired claims are reaped by an independently hourly-rate-limited
-# sweep. seq is the worker's FIFO ordering key within a home, with the job id
-# as the deterministic tiebreak.
+# sweep that remains inline in the worker loop but uses one directory walk
+# with batched rmdir rather than per-claim uname/stat subprocesses.
+# seq is the worker's FIFO ordering key within a home, with the job id as the
+# deterministic tiebreak.
 # FIFO is defined over completed stagings: a stage that returns before another
 # begins executes first; concurrently overlapping stagings have no relative
 # ordering contract.
