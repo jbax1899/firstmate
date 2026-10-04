@@ -863,6 +863,7 @@ fm_remote_job_reap_stale() { # <account-home>
         # >= age check). Batched rmdir tolerates concurrent mkdir/rmdir races
         # and non-empty dirs the same way the old per-claim rmdir || true did.
         find "$FM_REMOTE_JOB_SEQ_CLAIMS" -mindepth 1 -maxdepth 1 -type d \
+          -name '[0-9]*' ! -name '*[!0-9]*' ! -name 0 \
           ! -newer "$ref" -exec rmdir {} + 2>/dev/null || true
       else
         [ -z "$tmp" ] || rm -f -- "$tmp"
