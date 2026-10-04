@@ -113,8 +113,6 @@ FM_REMOTE_JOB_CHILD_PATH=
 FM_REMOTE_JOB_STATE=
 FM_REMOTE_JOB_JOBS=
 FM_REMOTE_JOB_SEQ_CLAIMS=
-# Host uname for stat(1) syntax; resolved once in fm_remote_job_path_mtime.
-FM_REMOTE_JOB_HOST_UNAME=
 FM_REMOTE_JOB_ID=
 FM_REMOTE_JOB_STDOUT=
 FM_REMOTE_JOB_STDERR=
@@ -803,16 +801,8 @@ fm_remote_job_reap() { # <account-home> <id>; only removes an exact completed re
 
 fm_remote_job_path_mtime() { # <path>
   # The platform override controls worker shape in isolated tests, not the host
-  # kernel's stat syntax. Resolve that host once per process so a sweep never
-  # forks uname once per path.
-  if [ -z "${FM_REMOTE_JOB_HOST_UNAME:-}" ]; then
-    FM_REMOTE_JOB_HOST_UNAME=$(uname -s 2>/dev/null || true)
-  fi
-  if [ "$FM_REMOTE_JOB_HOST_UNAME" = Darwin ]; then
-    /usr/bin/stat -f %m "$1" 2>/dev/null
-  else
-    stat -c %Y "$1" 2>/dev/null
-  fi
+  # kernel's stat syntax.
+  if [ "$(uname -s 2>/dev/null || true)" = Darwin ]; then /usr/bin/stat -f %m "$1" 2>/dev/null; else stat -c %Y "$1" 2>/dev/null; fi
 }
 
 fm_remote_job_stage_owner_alive() { # <stage-dir>
