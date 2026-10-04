@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The claim sweep must preserve the former numeric-name eligibility rules.
 set -u
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-job-claim-retention)
