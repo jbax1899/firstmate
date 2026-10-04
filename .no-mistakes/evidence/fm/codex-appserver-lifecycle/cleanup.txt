@@ -1,0 +1,1 @@
+Both disposable canary homes removed after private tmux shutdown. Read-only generated hook directories made owner-writable for removal. No source changes.

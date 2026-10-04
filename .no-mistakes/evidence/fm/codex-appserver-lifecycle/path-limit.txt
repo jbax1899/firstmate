@@ -1,0 +1,32 @@
+treehouse get
+jordan@DESKTOP:~/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/
+.test-appserver-tmp/fm-as-canary-xmww_j7p/projects/canary$ treehouse get
+A new version of treehouse is available: v2.3.0 → v3.1.2
+Run "treehouse update" to update
+
+🌳 Setting up worktree...
+🌳 Entered worktree at ~/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0
+A4051JR/.test-appserver-tmp/fm-as-canary-xmww_j7p/projects/canary/.treehouse/can
+ary-436d29/1/canary. Type 'exit' to return.
+jordan@DESKTOP:~/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/
+.test-appserver-tmp/fm-as-canary-xmww_j7p/projects/canary/.treehouse/canary-436d
+29/1/canary$ cd -- '/home/jordan/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1
+BJPHWAZ0A4051JR/.test-appserver-tmp/fm-as-canary-xmww_j7p/projects/canary/.treeh
+ouse/canary-436d29/1/canary'
+jordan@DESKTOP:~/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/
+.test-appserver-tmp/fm-as-canary-xmww_j7p/projects/canary/.treehouse/canary-436d
+29/1/canary$ export GOTMPDIR=/tmp/fm-success/gotmp
+jordan@DESKTOP:~/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/
+.test-appserver-tmp/fm-as-canary-xmww_j7p/projects/canary/.treehouse/canary-436d
+29/1/canary$ export COMPACT_ADVISER_DISABLE=1
+jordan@DESKTOP:~/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/
+.test-appserver-tmp/fm-as-canary-xmww_j7p/projects/canary/.treehouse/canary-436d
+29/1/canary$ export FM_TASK_ID=success
+jordan@DESKTOP:~/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/
+.test-appserver-tmp/fm-as-canary-xmww_j7p/projects/canary/.treehouse/canary-436d
+29/1/canary$ . '/tmp/fm-success+19ddc7e35205c84462624d77e97acef2c6b2563e1ca4c49c
+718c675e218c8d8f/launch.s1791149524.30991.23820.sh'
+app-server: app-server socket path exceeds portable Unix socket limit
+jordan@DESKTOP:~/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/
+.test-appserver-tmp/fm-as-canary-xmww_j7p/projects/canary/.treehouse/canary-436d
+29/1/canary$

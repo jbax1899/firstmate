@@ -1,0 +1,32 @@
+spawned success harness=codex kind=scout window=firstmate:fm-success worktree=/tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/1/canary
+ok - live working projection
+ok - live steer 01a108d5-4b84-7ff0-b694-6bfc82a56358
+ok - live decision opens
+ok - live same-turn completion
+ok - live kernel sandbox denial {"workspace": "WORKSPACE_OK", "sibling": "DENIED:30", "socket": "DENIED:1"}
+stopped app-server pid=50302 exit=0
+ok - live idempotent exit
+spawned failure harness=codex kind=scout window=firstmate:fm-failure worktree=/tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/2/canary
+ok - live failed turn never complete
+stopped app-server pid=7185 exit=0
+ok - live idempotent exit
+spawned cancel harness=codex kind=scout window=firstmate:fm-cancel worktree=/tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/3/canary
+ok - live cancel pending decision
+stopped app-server pid=16902 exit=0
+ok - live idempotent exit
+ok - live cancellation retires callbacks and reaps app-server
+CANARY_PASS evidence=/tmp/fm-as-canary-81nteudw
+Retained disposable task evidence: /tmp/fm-as-canary-81nteudw
+Traceback (most recent call last):
+  File "<stdin>", line 15, in <module>
+  File "/usr/lib/python3.12/shutil.py", line 785, in rmtree
+    _rmtree_safe_fd(fd, path, onexc)
+  File "/usr/lib/python3.12/shutil.py", line 686, in _rmtree_safe_fd
+    _rmtree_safe_fd(dirfd, fullname, onexc)
+  File "/usr/lib/python3.12/shutil.py", line 686, in _rmtree_safe_fd
+    _rmtree_safe_fd(dirfd, fullname, onexc)
+  File "/usr/lib/python3.12/shutil.py", line 717, in _rmtree_safe_fd
+    onexc(os.unlink, fullname, err)
+  File "/usr/lib/python3.12/shutil.py", line 715, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+PermissionError: [Errno 13] Permission denied: 'post-commit'

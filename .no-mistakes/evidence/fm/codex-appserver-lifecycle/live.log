@@ -1,0 +1,28 @@
+spawned success harness=codex kind=scout window=firstmate:fm-success worktree=/home/jordan/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/.test-appserver-tmp/fm-as-canary-xmww_j7p/projects/canary/.treehouse/canary-436d29/1/canary
+Retained disposable task evidence: /home/jordan/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/.test-appserver-tmp/fm-as-canary-xmww_j7p
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+  File "<frozen runpy>", line 286, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/jordan/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/tests/fm-codex-appserver-live.py", line 114, in <module>
+    wait(lambda:'state: working' in status('success'),'working projection')
+  File "/home/jordan/.no-mistakes/worktrees/ccf19f2e7ab0/01M44D52RY1BJPHWAZ0A4051JR/tests/fm-codex-appserver-live.py", line 35, in wait
+    raise AssertionError(description)
+AssertionError: working projection
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<stdin>", line 12, in <module>
+  File "/usr/lib/python3.12/shutil.py", line 785, in rmtree
+    _rmtree_safe_fd(fd, path, onexc)
+  File "/usr/lib/python3.12/shutil.py", line 686, in _rmtree_safe_fd
+    _rmtree_safe_fd(dirfd, fullname, onexc)
+  File "/usr/lib/python3.12/shutil.py", line 686, in _rmtree_safe_fd
+    _rmtree_safe_fd(dirfd, fullname, onexc)
+  File "/usr/lib/python3.12/shutil.py", line 717, in _rmtree_safe_fd
+    onexc(os.unlink, fullname, err)
+  File "/usr/lib/python3.12/shutil.py", line 715, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+PermissionError: [Errno 13] Permission denied: 'post-commit'

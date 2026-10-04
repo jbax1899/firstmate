@@ -1,0 +1,17 @@
+treehouse get
+jordan@DESKTOP:/tmp/fm-as-canary-81nteudw/projects/canary$ treehouse get
+A new version of treehouse is available: v2.3.0 → v3.1.2
+Run "treehouse update" to update
+
+🌳 Setting up worktree...
+🌳 Entered worktree at /tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/3/canary. Type 'exit' to return.
+jordan@DESKTOP:/tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/3/canary$ cd -- '/tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/3/canary'
+jordan@DESKTOP:/tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/3/canary$ export GOTMPDIR=/tmp/fm-cancel/gotmp
+jordan@DESKTOP:/tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/3/canary$ export COMPACT_ADVISER_DISABLE=1
+jordan@DESKTOP:/tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/3/canary$ export FM_TASK_ID=cancel
+jordan@DESKTOP:/tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/3/canary$ . '/tmp/fm-cancel+e3b86828035fcbc4f66ddccff09d820c82dcfff7a64fcbd99383cb6f07fdaa30/launch.s1791149606.11296.7932.sh'
+app-server started pid=16902
+{"method": "turn/started", "params": {"threadId": "01a108d6-0b77-7cf2-9d86-a0bf7fcc0746", "turn": {"id": "01a108d6-0bc2-7ee0-918d-70edb0460276", "items": [], "itemsView": "notLoaded", "status": "inProgress", "error": null, "startedAt": 1791149607, "completedAt": null, "durationMs": null}}}
+2026-10-04T21:33:32.180919Z ERROR codex_core::tools::router: error=dynamic tool call was cancelled before receiving a response
+{"method": "turn/completed", "params": {"threadId": "01a108d6-0b77-7cf2-9d86-a0bf7fcc0746", "turn": {"id": "01a108d6-0bc2-7ee0-918d-70edb0460276", "items": [], "itemsView": "notLoaded", "status": "interrupted", "error": null, "startedAt": 1791149607, "completedAt": 1791149612, "durationMs": 4305}}}
+jordan@DESKTOP:/tmp/fm-as-canary-81nteudw/projects/canary/.treehouse/canary-254668/3/canary$
