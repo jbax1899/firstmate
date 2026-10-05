@@ -738,6 +738,10 @@ fm_send_feed_resolved_holds() { # <answer-text>
   done
   if ! printf '%s' "$lines" | "$SCRIPT_DIR/fm-captain-hold.sh" answers \
     --source "a firstmate answer sent to $RESOLVE_TASK_ID" >/dev/null 2>&1; then
+    if [ -n "$TARGET_META" ] && [ "$(fm_meta_get "$TARGET_META" codex_transport)" = appserver ]; then
+      echo "error: this captain-held task could not be closed: ${RESOLVE_HOLD_KEYS}. The app-server answer remains pending; retry the same keyed answer after fixing closure." >&2
+      return 1
+    fi
     echo "error: the answer was delivered to $T, but this captain-held task could not be closed: ${RESOLVE_HOLD_KEYS}. Close it with fm-captain-hold.sh answer - do not resend the answer." >&2
     return 1
   fi

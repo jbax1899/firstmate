@@ -3146,6 +3146,14 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
     fi &&
       printf '\n' &&
       cat "$SOURCE_BRIEF" &&
+      if [ "$CODEX_APPSERVER" = 1 ]; then
+        printf '\n%s\n' '# App-server transport contract (supersedes brief reporting and inbox instructions)' 'Use firstmate_report progress for status and needs-decision for a decision; its callback waits for the supervisor answer in this turn. Never append status, poll an inbox, or write fleet data. Submit result only when delivery evidence is complete; terminal success is recorded by the supervisor.'
+        if [ "$KIND" = scout ]; then
+          printf '%s\n' 'Submit the complete standalone Markdown report in the result report field (maximum 262144 UTF-8 bytes), with a short conclusion in message. Do not write report.md yourself; the supervisor atomically publishes it at the canonical task report path, where it survives teardown.'
+        else
+          printf '%s\n' 'Your task branch is already provisioned in task-private Git metadata; do not recreate it. Make local commits only. The supervisor verifies and imports your exact task HEAD after successful handoff, then existing delivery handles publication. Keep scratch evidence inside the task workspace.'
+        fi
+      fi &&
       if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
         fm_brief_intent_overlay "$CAPTAIN_INTENT"
       fi

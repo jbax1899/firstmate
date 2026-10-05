@@ -13,7 +13,9 @@ import os
 from pathlib import Path
 import queue
 import re
+import secrets
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -21,22 +23,27 @@ import threading
 import time
 
 BIN = Path(__file__).resolve().parent
+from fm_codex_git import PrivateGit
+REPORT_LIMIT = 262144
 LIMIT = 8192
 # JSON can encode each accepted input byte as a six-byte escape. Include
 # bounded supervisor identity fields and framing in the transport budget.
 CONTROL_LIMIT = 6 * LIMIT + 4096
+PROTOCOL_LIMIT = 6 * REPORT_LIMIT + CONTROL_LIMIT
 TOKEN = re.compile(r"[A-Za-z0-9._-]{1,160}\Z")
 TOOL = {"type": "function", "name": "firstmate_report",
         "description": "Report to FirstMate. needs-decision waits for the supervisor's answer in this same turn. result is delivery evidence, not terminal success.",
         "inputSchema": {"type": "object", "properties": {
             "type": {"type": "string", "enum": ["progress", "needs-decision", "result"]},
-            "message": {"type": "string", "minLength": 1, "maxLength": 500}},
+            "message": {"type": "string", "minLength": 1, "maxLength": 500},
+            "report": {"type": "string", "minLength": 1, "maxLength": REPORT_LIMIT}},
             "required": ["type", "message"], "additionalProperties": False}}
 
 
 def payload(value):
-    if not isinstance(value, dict) or set(value) != {"type", "message"}:
-        raise ValueError("expected only type and message")
+    if (not isinstance(value, dict) or not {"type", "message"} <= set(value)
+            or set(value) - {"type", "message", "report"}):
+        raise ValueError("expected type, message and optional report")
     if value["type"] not in ("progress", "needs-decision", "result"):
         raise ValueError("unknown report type")
     text = value["message"]
@@ -44,7 +51,11 @@ def payload(value):
         raise ValueError("report size")
     if any(ord(c) < 32 or ord(c) == 127 for c in text):
         raise ValueError("report control character")
-    return value["type"], text
+    report = value.get("report")
+    if "report" in value and (value["type"] != "result" or not isinstance(report, str)
+            or not 1 <= len(report.encode()) <= REPORT_LIMIT or "\x00" in report):
+        raise ValueError("invalid result report")
+    return value["type"], text, report
 
 
 def socket_path(state, task, gen):
@@ -72,6 +83,8 @@ class Adapter:
         self.proc = None
         self.stopping = False
         self.terminal = None
+        self.private_git = None
+        self.private_root = None
         self.path = socket_path(self.state, task, gen)
         self.check()
 
@@ -124,11 +137,14 @@ class Adapter:
     def reader(self):
         try:
             while True:
-                line = self.proc.stdout.readline(1048577)
+                line = self.proc.stdout.readline(PROTOCOL_LIMIT + 1)
                 if not line:
                     break
-                if len(line) > 1048576 or not line.endswith("\n"):
+                if len(line) > PROTOCOL_LIMIT or not line.endswith("\n"):
                     self.events.put(ValueError("oversized protocol message"))
+                    if self.proc is not None and self.proc.poll() is None:
+                        with contextlib.suppress(ProcessLookupError):
+                            os.killpg(self.proc.pid, signal.SIGKILL)
                     break
                 try:
                     self.events.put(json.loads(line))
@@ -178,7 +194,7 @@ class Adapter:
             if (not isinstance(call, str) or not 1 <= len(call) <= 160
                     or call in self.calls or len(self.calls) >= 4096):
                 raise ValueError("duplicate or malformed call")
-            kind, text = payload(p.get("arguments"))
+            kind, text, report = payload(p.get("arguments"))
             self.calls.add(call)
             self.requests.add(ident)
             if self.pending:
@@ -191,7 +207,16 @@ class Adapter:
             if kind == "result":
                 if self.result is not None:
                     raise ValueError("result already reported")
-                self.result = text
+                with self.bound():
+                    meta = dict(line.split("=", 1) for line in
+                                (self.state / (self.task + ".meta")).read_text().splitlines() if "=" in line)
+                    if meta.get("kind") == "scout":
+                        if report is None:
+                            raise ValueError("scout result requires report content")
+                        self.publish_scout_report(report)
+                    elif report is not None:
+                        raise ValueError("report content is only accepted for scouts")
+                    self.result = text
             else:
                 self.report("working: " + text)
             self.tool_reply(msg["id"], "accepted " + kind)
@@ -251,6 +276,9 @@ class Adapter:
             self.retire_pending()
             self.terminal = status
             if status == "completed" and self.result is not None:
+                if self.private_git is not None:
+                    oid = self.private_git.publish(self.private_root.parent)
+                    self.result += " (task commit " + oid[:12] + ")"
                 self.report("done: " + self.result)
             elif status != "completed":
                 self.result = None
@@ -259,6 +287,49 @@ class Adapter:
             self.busy("idle", event)
         elif method == "item/agentMessage/delta":
             print(p.get("delta", ""), end="", flush=True)
+
+    def publish_scout_report(self, report):
+        data = Path(os.environ.get("FM_DATA_OVERRIDE") or
+                    str(Path(os.environ["FM_HOME"]) / "data"))
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        data_fd = os.open(data, directory_flags)
+        task_fd = None
+        temporary = ".report." + self.gen + "." + secrets.token_hex(8) + ".tmp"
+        fd = None
+        try:
+            try:
+                task_fd = os.open(self.task, directory_flags, dir_fd=data_fd)
+            except FileNotFoundError:
+                os.mkdir(self.task, 0o700, dir_fd=data_fd)
+                task_fd = os.open(self.task, directory_flags, dir_fd=data_fd)
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                         os.O_NOFOLLOW, 0o600, dir_fd=task_fd)
+            body = report.encode("utf-8")
+            view = memoryview(body)
+            while view:
+                written = os.write(fd, view)
+                view = view[written:]
+            os.fsync(fd)
+            os.close(fd)
+            fd = None
+            # link() creates the final name atomically and refuses to replace an
+            # existing report, including a symlink left by another generation.
+            try:
+                os.link(temporary, "report.md", src_dir_fd=task_fd,
+                        dst_dir_fd=task_fd, follow_symlinks=False)
+            except FileExistsError as exc:
+                raise ValueError("scout report already exists") from exc
+            os.fsync(task_fd)
+        finally:
+            if fd is not None:
+                os.close(fd)
+            if task_fd is not None:
+                try:
+                    os.unlink(temporary, dir_fd=task_fd)
+                except FileNotFoundError:
+                    pass
+                os.close(task_fd)
+            os.close(data_fd)
 
     def decisions(self):
         return subprocess.check_output(["bash", "-c",
@@ -269,6 +340,26 @@ class Adapter:
         if self.pending and self.pending["answer"] is not None:
             keys = [row.split("\t")[0] for row in self.decisions().splitlines()]
             if self.pending["key"] not in keys:
+                # A transfer closes the status key before its captain call is
+                # answered. Ask the canonical owner about both supported ids;
+                # an unreadable backlog must never release the callback.
+                hold_script = ["bash", str(BIN / "fm-captain-hold.sh")]
+                bound = subprocess.run(hold_script + ["binding", self.task],
+                    capture_output=True, text=True)
+                if bound.returncode not in (0, 1):
+                    return
+                held_ids = [self.pending["key"], self.task + "-decision-" + self.pending["key"]]
+                if bound.returncode == 0:
+                    identity = bound.stdout.strip()
+                    if not TOKEN.fullmatch(identity):
+                        return
+                    held_ids.insert(0, identity)
+                for held in dict.fromkeys(held_ids):
+                    result = subprocess.run(hold_script + [
+                        "open", held, "--distinguish-absent"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if result.returncode not in (1, 3):
+                        return
                 self.tool_reply(self.pending["id"], self.pending["answer"])
                 self.pending = None
 
@@ -288,7 +379,7 @@ class Adapter:
         if op == "answer":
             if not self.active or not self.pending or self.pending["key"] != data["key"]:
                 raise ValueError("no matching pending decision")
-            if self.pending["answer"] is not None or not text.strip():
+            if self.pending["answer"] not in (None, text) or not text.strip():
                 raise ValueError("duplicate or empty answer")
             self.pending["answer"] = text
             return "answer accepted; waiting for canonical decision closure"
@@ -376,9 +467,40 @@ class Adapter:
         if self.state == worktree or worktree in self.state.parents:
             raise ValueError("worker workspace would grant fleet state")
         listener = socket.socket(socket.AF_UNIX)
+        meta = dict(line.split("=", 1) for line in
+                    (self.state / (self.task + ".meta")).read_text().splitlines() if "=" in line)
+        writable_roots = []
+        if meta.get("kind") == "ship":
+            if not meta.get("branch"):
+                raise ValueError("app-server ship has no supervisor-selected branch")
+            parent = Path("/dev/shm/firstmate-appserver")
+            parent.mkdir(mode=0o700, exist_ok=True)
+            if (parent.is_symlink() or not parent.is_dir()
+                    or parent.stat().st_uid != os.getuid()):
+                raise ValueError("private Git parent is not a supervisor-owned directory")
+            if parent.stat().st_mode & 0o077:
+                os.chmod(parent, 0o700)
+            task_dir = parent / self.task
+            task_dir.mkdir(mode=0o700, exist_ok=True)
+            if task_dir.is_symlink() or not task_dir.is_dir() or task_dir.stat().st_uid != os.getuid():
+                raise ValueError("private Git task directory is unsafe")
+            if task_dir.stat().st_mode & 0o077:
+                os.chmod(task_dir, 0o700)
+            self.private_root = task_dir / self.gen
+            self.private_git = PrivateGit(worktree, self.private_root, meta["branch"])
+            writable_roots.append(str(self.private_root))
         # bind is exclusive for this generation. A competing launch must not
         # overwrite lifecycle evidence or remove the existing owner's socket.
-        listener.bind(str(self.path))
+        try:
+            listener.bind(str(self.path))
+        except BaseException:
+            listener.close()
+            if self.private_git is not None:
+                try:
+                    self.private_git.restore()
+                finally:
+                    shutil.rmtree(self.private_root, ignore_errors=True)
+            raise
         try:
             os.chmod(self.path, 0o600)
             listener.listen(4)
@@ -394,7 +516,7 @@ class Adapter:
             self.write({"method": "initialized", "params": {}})
             params = {"cwd": str(worktree), "ephemeral": True, "sandbox": "workspace-write",
                 "approvalPolicy": "never", "dynamicTools": [TOOL], "config": {
-                    "features.hooks": False, "sandbox_workspace_write.writable_roots": [],
+                    "features.hooks": False, "sandbox_workspace_write.writable_roots": writable_roots,
                     "sandbox_workspace_write.network_access": False,
                     "sandbox_workspace_write.exclude_slash_tmp": True,
                     "sandbox_workspace_write.exclude_tmpdir_env_var": True}}
@@ -402,16 +524,20 @@ class Adapter:
                 params["model"] = model
             reply = self.rpc("thread/start", params)
             sandbox = reply.get("sandbox", {})
+            expected_extra = {Path(root).resolve() for root in writable_roots}
+            actual_roots = {Path(root).resolve() for root in sandbox.get("writableRoots", [])}
+            permitted_roots = {worktree} | expected_extra
             if (reply.get("approvalPolicy") != "never" or reply.get("cwd") != str(worktree)
-                    or reply.get("runtimeWorkspaceRoots") != [str(worktree)]
+                    or reply.get("runtimeWorkspaceRoots") != [str(worktree)] + writable_roots
                     or sandbox.get("type") != "workspaceWrite"
                     or sandbox.get("networkAccess") is not False
                     or sandbox.get("excludeSlashTmp") is not True
                     or sandbox.get("excludeTmpdirEnvVar") is not True
-                    or any(Path(root).resolve() != worktree for root in sandbox.get("writableRoots", []))):
+                    or not expected_extra.issubset(actual_roots)
+                    or not actual_roots.issubset(permitted_roots)):
                 raise ValueError("server did not establish the required worker sandbox")
             self.thread = reply["thread"]["id"]
-            prompt = brief.read_text() + "\nUse firstmate_report for all supervisor reporting. Never write FirstMate state directly. Use type needs-decision to ask and wait for an answer. Use type result for your final delivery evidence. Do not use a shell status/inbox channel."
+            prompt = "FIRSTMATE DELIVERY CONTRACT FIRST; overrides conflicting brief text. Use firstmate_report only; never write status or report files or poll inboxes. A scout must include its complete Markdown in the result report field. A ship commits only on its provisioned private branch.\n\n" + brief.read_text()
             params = {"threadId": self.thread, "input": [{"type": "text", "text": prompt, "text_elements": []}]}
             if effort:
                 params["effort"] = effort
@@ -437,6 +563,15 @@ class Adapter:
             listener.close()
             self.path.unlink(missing_ok=True)
             self.shutdown()
+            if self.private_git is not None:
+                try:
+                    self.private_git.restore()
+                finally:
+                    shutil.rmtree(self.private_root, ignore_errors=True)
+                    try:
+                        self.private_root.parent.rmdir()
+                    except OSError:
+                        pass
 
 
 def main():
