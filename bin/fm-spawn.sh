@@ -3140,6 +3140,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   {
     if [ "$CODEX_APPSERVER" = 1 ]; then
       printf '%s\n' 'FIRSTMATE_OP: v1 launch-brief' 'You are a FirstMate worker, not a supervisor. Report only through firstmate_report. Never address the user directly. Steering arrives in this active turn, not through a filesystem inbox. Canonical fleet state is read-only to you.'
+      printf 'If the `firstmate-coding-guidelines` skill name does not resolve in this session, read `%s/.agents/skills/firstmate-coding-guidelines/SKILL.md` instead.\n' "$FM_ROOT"
     else
       fm_brief_worker_role "$STATE" "$ID" "$FM_ROOT"
     fi &&
