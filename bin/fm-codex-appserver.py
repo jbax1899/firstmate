@@ -15,7 +15,6 @@ import queue
 import re
 import secrets
 import signal
-import shutil
 import socket
 import subprocess
 import sys
@@ -497,10 +496,7 @@ class Adapter:
         except BaseException:
             listener.close()
             if self.private_git is not None:
-                try:
-                    self.private_git.restore()
-                finally:
-                    shutil.rmtree(self.private_root, ignore_errors=True)
+                self.private_git.cleanup()
             raise
         try:
             os.chmod(self.path, 0o600)
@@ -565,14 +561,7 @@ class Adapter:
             self.path.unlink(missing_ok=True)
             self.shutdown()
             if self.private_git is not None:
-                try:
-                    self.private_git.restore()
-                finally:
-                    shutil.rmtree(self.private_root, ignore_errors=True)
-                    try:
-                        self.private_root.parent.rmdir()
-                    except OSError:
-                        pass
+                self.private_git.cleanup()
 
 
 def main():

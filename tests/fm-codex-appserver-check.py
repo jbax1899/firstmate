@@ -49,11 +49,15 @@ def private_git_delivery_check():
             (work / "tracked.txt").write_text("task change\n")
             real_git(work, "add", "tracked.txt")
             real_git(work, "commit", "--quiet", "-m", "task delivery")
+            expected = real_git(work, "rev-parse", "HEAD").decode().strip()
             oid = helper.publish(private_parent)
+            assert oid == expected
             assert real_git(repo, "rev-parse", "refs/heads/task-ship").decode().strip() == oid
             assert real_git(sibling, "rev-parse", "HEAD").decode().strip() == sibling_head
             assert real_git(work, "rev-parse", "HEAD").decode().strip() == oid
             assert real_git(work, "status", "--porcelain").strip() == b""
+            helper.cleanup()
+            assert not helper.root.exists()
         finally:
             if helper:
                 helper.restore()
@@ -70,6 +74,35 @@ def private_git_delivery_check():
             real_git(work2, "add", "tracked.txt")
             real_git(work2, "commit", "--quiet", "-m", "task delivery")
             private_head = real_git(work2, "rev-parse", "HEAD").decode().strip()
+            marker = top / "supervisor-executed"
+            redirected = helper2.root / "redirected"
+            shutil.copytree(helper2.root, redirected, ignore=shutil.ignore_patterns("redirected"))
+            real_git(redirected, "config", "core.fsmonitor", "touch " + str(marker))
+            for name, value in (("commondir", str(redirected)),
+                                ("config.worktree", "[core]\nfsmonitor = touch " + str(marker)),
+                                ("objects/info/alternates", str(repo / ".git/objects"))):
+                path = helper2.root / name
+                path.write_text(value + "\n")
+                try:
+                    helper2.publish(private_parent2)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("metadata redirection was accepted: " + name)
+                assert not marker.exists()
+                assert real_git(repo, "rev-parse", "task-unsafe").decode().strip() == base
+                path.unlink()
+            (work2 / "tracked.txt").write_text("uncommitted\n")
+            for staged in (False, True):
+                if staged:
+                    real_git(work2, "add", "tracked.txt")
+                try:
+                    helper2.publish(private_parent2)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("dirty tracked content was accepted")
+            real_git(work2, "reset", "--hard", private_head)
             real_git(work2, "update-ref", "refs/heads/unrelated", private_head)
             try:
                 helper2.publish(private_parent2)
@@ -77,6 +110,20 @@ def private_git_delivery_check():
                 pass
             else:
                 raise AssertionError("unrelated private ref was accepted")
+            real_git(work2, "update-ref", "-d", "refs/heads/unrelated")
+            tree = real_git(repo, "rev-parse", "HEAD^{tree}").decode().strip()
+            moved = real_git(repo, "commit-tree", tree, "-p", base, "-m", "supervisor moved branch").decode().strip()
+            real_git(repo, "update-ref", "refs/heads/task-unsafe", moved, base)
+            try:
+                helper2.publish(private_parent2)
+            except subprocess.CalledProcessError:
+                pass
+            else:
+                raise AssertionError("publication overwrote a moved canonical branch")
+            assert real_git(repo, "rev-parse", "task-unsafe").decode().strip() == moved
+            helper2.cleanup()
+            assert helper2.root.exists()
+            assert real_git(helper2.root, "cat-file", "-p", private_head + ":tracked.txt") == b"unsafe change\n"
             assert real_git(repo, "rev-parse", "refs/heads/sibling-task").decode().strip() == sibling_head
             assert subprocess.run(["git", "-C", str(repo), "show-ref", "--verify",
                                    "refs/heads/unrelated"], capture_output=True).returncode != 0
@@ -124,7 +171,7 @@ for line in sys.stdin:
   event('turn/started',{'threadId':'thread','turn':{'id':'turn','status':'inProgress'}})
   emit({'id':ident,'result':{'turn':{'id':'turn'}}})
   if mode=='malformed':event('turn/completed',{'threadId':'thread','turn':{}})
-  elif mode=='death':sys.exit(3)
+  elif mode=='death':commit_ship();sys.exit(3)
   elif mode=='duplicate-request':tool('needs-decision');tool('needs-decision')
   elif mode=='bad-json':print('{',flush=True)
   elif mode=='bad-params':event('turn/completed',[])
@@ -132,6 +179,7 @@ for line in sys.stdin:
   elif mode=='bad-response':emit({'id':'foreign','result':{}})
   elif mode=='oversized':print('x'*2000000,flush=True)
   elif mode in ('decision','decision-held','decision-held-legacy','decision-large','decision-death','decision-cancel','decision-backend-death','interrupt-error','interrupt-timeout'):
+   if mode in ('decision-cancel','decision-backend-death'): commit_ship()
    tool('needs-decision')
    if mode=='decision-backend-death':threading.Timer(2,lambda:os._exit(3)).start()
   elif mode=='wrong-thread':tool(thread='sibling')
@@ -146,6 +194,11 @@ for line in sys.stdin:
    if mode=='scout-path':arguments['path']='../sibling/report.md'
    if mode=='scout-large':arguments['report']='x'*262145
    tool(arguments=arguments)
+  elif mode=='import-failure':
+   commit_ship()
+   private=subprocess.check_output(['git','-C',os.environ['CASE_WORKTREE'],'rev-parse','--absolute-git-dir'],text=True).strip()
+   open(os.path.join(private,'commondir'),'w').write('missing\n')
+   tool('result')
   elif mode=='success-no-result':terminal('completed')
   elif mode=='working':tool()
   elif mode=='large-report':tool(arguments={'type':'progress','message':'x'*501})
@@ -205,7 +258,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
     (fakebin / 'tmux').chmod(0o755)
     env = dict(os.environ, PATH=str(fakebin)+':'+os.environ['PATH'])
     for case in ['scout-stale','scout-success','scout-missing','scout-path','scout-large','scout-duplicate','scout-preexisting','working','success','failed','interrupted','result-active','success-no-result',
-                 'wrong-thread','wrong-turn','sibling','unknown','bad-report','malformed','death',
+                 'wrong-thread','wrong-turn','sibling','unknown','bad-report','malformed','death','import-failure',
                  'decision','decision-held','decision-held-legacy','decision-large','decision-death','decision-cancel','decision-backend-death','interrupt-error','interrupt-timeout','stale',
                  'duplicate-request','bad-json','bad-params','bad-turn','bad-response','oversized','large-report','bad-shape','unknown-tool']:
         home = top / case
@@ -234,10 +287,12 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
             branch = 'fm/t'
             real_git(repo, 'branch', branch)
             real_git(repo, 'worktree', 'add', '--quiet', str(work), branch)
+            base = real_git(repo, 'rev-parse', 'main').decode().strip()
+            original_pointer = (work/'.git').read_bytes()
         brief = home / 'brief'
         brief.write_text('test')
         gen = subprocess.check_output(['bash',str(ROOT/'bin/fm-busy-event.sh'),'arm',str(state),'t'],text=True).strip()
-        (state/'t.meta').write_text(f'busy_gen={gen}\ncodex_transport=appserver\nworktree={work}\nkind={'scout' if case.startswith('scout-') else 'secondmate'}\nharness=codex\nwindow=test:fm-t\n')
+        (state/'t.meta').write_text(f'busy_gen={gen}\ncodex_transport=appserver\nworktree={work}\nkind={'scout' if case.startswith('scout-') else 'ship'}\nbranch={branch}\nharness=codex\nwindow=test:fm-t\n')
         (state/'sibling.status').write_text('PRESERVE')
         def send(text, key=''):
             args = ['bash',str(ROOT/'bin/fm-send.sh'),'t']
@@ -261,7 +316,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
                 assert 'done' not in statuses()
                 assert not (home/'data'/'t'/'report.md').exists()
                 (state/'t.busy-gen').write_text(gen+'\n')
-            elif case in ('death','malformed','duplicate-request','bad-json','bad-params','bad-turn','bad-response','oversized'):
+            elif case in ('import-failure','death','malformed','duplicate-request','bad-json','bad-params','bad-turn','bad-response','oversized'):
                 proc.wait(timeout=10)
                 assert proc.returncode != 0
                 assert 'state=unknown' in busy.read_text()
@@ -386,6 +441,24 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
             if proc.poll() is None:
                 assert control('exit').returncode==0
                 proc.wait(timeout=15)
+            if not is_scout:
+                private = Path('/dev/shm/firstmate-appserver/t') / gen
+                published = 'turn-completed-result' in busy.read_text()
+                assert private.exists() != published
+                assert real_git(repo, 'rev-parse', 'main').decode().strip() == base
+                assert (work/'.git').read_bytes() == original_pointer
+                if published:
+                    head = real_git(work, 'rev-parse', 'HEAD').decode().strip()
+                    assert head != base
+                    assert real_git(repo, 'rev-parse', branch).decode().strip() == head
+                    assert real_git(work, 'show', 'HEAD:tracked.txt') == b'app-server delivery\n'
+                    assert real_git(work, 'status', '--porcelain').strip() == b''
+                elif case in ('death','decision-cancel','decision-backend-death','failed','interrupted','import-failure','result-active','stale'):
+                    if case == 'import-failure':
+                        (private/'commondir').unlink()
+                    head = real_git(private, 'rev-parse', 'HEAD').decode().strip()
+                    assert head != base
+                    assert real_git(private, 'show', 'HEAD:tracked.txt') == b'app-server delivery\n'
             output=(home/'output').read_text()
             server_pid=int(output.split('app-server started pid=')[1].splitlines()[0])
             try:
@@ -401,3 +474,5 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
             if proc.poll() is None:
                 proc.terminate();proc.wait(timeout=20)
             out.close()
+            if not is_scout:
+                shutil.rmtree(Path('/dev/shm/firstmate-appserver/t') / gen, ignore_errors=True)
