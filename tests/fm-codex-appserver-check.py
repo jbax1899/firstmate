@@ -212,6 +212,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
         state = home / 's'
         state.mkdir(parents=True)
         (home/'data').mkdir()
+        (home/'ambient-data').mkdir()
         if case=='scout-preexisting':
             (home/'data'/'t').mkdir()
             (home/'data'/'t'/'report.md').write_text('preserve existing\n')
@@ -252,7 +253,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
         def statuses():
             return log.read_text() if log.exists() else ''
         out = open(home/'output','w')
-        proc = subprocess.Popen(['python3',str(ROOT/'bin/fm-codex-appserver.py'),'run',str(state),'t',gen,str(home/'data'),str(brief),str(work)],env=dict(env,CASE=case,FM_HOME=str(home),CASE_STATE=str(state),CASE_GEN=gen,CASE_WORKTREE=str(work)),stdout=out,stderr=out)
+        proc = subprocess.Popen(['python3',str(ROOT/'bin/fm-codex-appserver.py'),'run',str(state),'t',gen,str(home/'data'),str(brief),str(work)],env=dict(env,CASE=case,FM_HOME=str(home),FM_DATA_OVERRIDE=str(home/'ambient-data'),CASE_STATE=str(state),CASE_GEN=gen,CASE_WORKTREE=str(work)),stdout=out,stderr=out)
         try:
             if case == 'scout-stale':
                 proc.wait(timeout=10)
@@ -294,7 +295,8 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
                             failed=send(answer,key)
                             assert failed.returncode!=0, failed.stdout
                             time.sleep(.5)
-                            assert 'done:' not in statuses(), statuses()
+                            assert 'done [' not in statuses(), statuses()
+                            assert 'turn-completed-result' not in busy.read_text(), busy.read_text()
                             assert hold('open',held).returncode==0
                             assert control('answer','DIFFERENT',key).returncode!=0
                         finally:
@@ -369,6 +371,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
                 wait(lambda:'state=idle' in busy.read_text() or proc.poll() is not None,'terminal '+case)
                 assert ('done' in statuses()) == (case in ('success','scout-success','scout-duplicate')), statuses()+chr(10)+busy.read_text()+chr(10)+(home/'output').read_text()
                 report=home/'data'/'t'/'report.md'
+                assert not (home/'ambient-data'/'t'/'report.md').exists()
                 if case in ('scout-success','scout-duplicate'):
                     assert report.read_text()=='# Findings\n'+('evidence line\n'*1000)
                 elif case=='scout-preexisting':

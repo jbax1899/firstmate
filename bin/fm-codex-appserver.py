@@ -343,8 +343,10 @@ class Adapter:
                 # answered. Ask the canonical owner about both supported ids;
                 # an unreadable backlog must never release the callback.
                 hold_script = ["bash", str(BIN / "fm-captain-hold.sh")]
+                hold_env = dict(os.environ, FM_STATE_OVERRIDE=str(self.state),
+                                FM_DATA_OVERRIDE=str(self.data))
                 bound = subprocess.run(hold_script + ["binding", self.task],
-                    capture_output=True, text=True)
+                    capture_output=True, text=True, env=hold_env)
                 if bound.returncode not in (0, 1):
                     return
                 held_ids = [self.pending["key"], self.task + "-decision-" + self.pending["key"]]
@@ -355,7 +357,7 @@ class Adapter:
                     held_ids.insert(0, identity)
                 for held in dict.fromkeys(held_ids):
                     result = subprocess.run(hold_script + [
-                        "open", held, "--distinguish-absent"],
+                        "open", held, "--distinguish-absent"], env=hold_env,
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     if result.returncode not in (1, 3):
                         return
