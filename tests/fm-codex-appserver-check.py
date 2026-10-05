@@ -252,7 +252,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
         def statuses():
             return log.read_text() if log.exists() else ''
         out = open(home/'output','w')
-        proc = subprocess.Popen(['python3',str(ROOT/'bin/fm-codex-appserver.py'),'run',str(state),'t',gen,str(brief),str(work)],env=dict(env,CASE=case,FM_HOME=str(home),CASE_STATE=str(state),CASE_GEN=gen,CASE_WORKTREE=str(work)),stdout=out,stderr=out)
+        proc = subprocess.Popen(['python3',str(ROOT/'bin/fm-codex-appserver.py'),'run',str(state),'t',gen,str(home/'data'),str(brief),str(work)],env=dict(env,CASE=case,FM_HOME=str(home),CASE_STATE=str(state),CASE_GEN=gen,CASE_WORKTREE=str(work)),stdout=out,stderr=out)
         try:
             if case == 'scout-stale':
                 proc.wait(timeout=10)

@@ -67,8 +67,8 @@ def socket_path(state, task, gen):
 
 
 class Adapter:
-    def __init__(self, state, task, gen):
-        self.state, self.task, self.gen = state.resolve(), task, gen
+    def __init__(self, state, task, gen, data):
+        self.state, self.task, self.gen, self.data = state.resolve(), task, gen, data.resolve()
         if not TOKEN.fullmatch(task) or not TOKEN.fullmatch(gen):
             raise ValueError("invalid supervisor binding")
         self.thread = self.turn = None
@@ -289,8 +289,7 @@ class Adapter:
             print(p.get("delta", ""), end="", flush=True)
 
     def publish_scout_report(self, report):
-        data = Path(os.environ.get("FM_DATA_OVERRIDE") or
-                    str(Path(os.environ["FM_HOME"]) / "data"))
+        data = self.data
         directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         data_fd = os.open(data, directory_flags)
         task_fd = None
@@ -584,8 +583,8 @@ def main():
             raise RuntimeError("adapter signal " + str(signum))
         signal.signal(signal.SIGTERM, stopped)
         signal.signal(signal.SIGHUP, stopped)
-        adapter = Adapter(state, task, gen)
-        adapter.run(Path(args[0]), Path(args[1]), args[2] if len(args) > 2 else "", args[3] if len(args) > 3 else "")
+        adapter = Adapter(state, task, gen, Path(args[0]))
+        adapter.run(Path(args[1]), Path(args[2]), args[3] if len(args) > 3 else "", args[4] if len(args) > 4 else "")
     elif mode == "control":
         text = sys.stdin.read(LIMIT + 1)
         if len(text.encode()) > LIMIT:
