@@ -182,6 +182,10 @@ class PrivateGit:
             if index.is_symlink() or not index.is_file() or index.stat().st_nlink != 1:
                 raise ValueError("task-private index is unsafe")
             shutil.copyfile(index, snapshot / "index")
+            flags = git_dir(snapshot, "ls-files", "-v", "-z").split(b"\0")
+            if any(entry and (entry[:1].islower() or entry[:1].upper() == b"S")
+                   for entry in flags):
+                raise ValueError("task-private index contains assume-unchanged or skip-worktree entries")
             git(snapshot, "update-ref", self.ref, oid)
             git(snapshot, "symbolic-ref", "HEAD", self.ref)
             for args in (("diff", "--quiet", "--no-ext-diff", "--no-textconv", oid, "--"),

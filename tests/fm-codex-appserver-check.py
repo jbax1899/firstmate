@@ -62,6 +62,43 @@ def private_git_delivery_check():
             if helper:
                 helper.restore()
             shutil.rmtree(private_parent, ignore_errors=True)
+        # Index flags fail closed even when Git's ordinary diff hides the edit.
+        for flag, expected_tag in (("assume-unchanged", b"h"),
+                                   ("skip-worktree", b"S")):
+            for modified in (False, True):
+                branch = "task-flag-" + flag + ("-modified" if modified else "-clean")
+                flag_work = top / branch
+                real_git(repo, "branch", branch, base)
+                real_git(repo, "worktree", "add", "--quiet", str(flag_work), branch)
+                flag_parent = Path(tempfile.mkdtemp(prefix="fm-private-git-flag-", dir="/dev/shm"))
+                flag_helper = None
+                try:
+                    flag_helper = PrivateGit(flag_work, flag_parent / "task", branch)
+                    (flag_work / "tracked.txt").write_text("task commit\n")
+                    real_git(flag_work, "add", "tracked.txt")
+                    real_git(flag_work, "commit", "--quiet", "-m", "task delivery")
+                    real_git(flag_work, "update-index", "--" + flag, "tracked.txt")
+                    assert real_git(flag_work, "ls-files", "-v").startswith(expected_tag)
+                    if modified:
+                        (flag_work / "tracked.txt").write_text("hidden change\n")
+                        real_git(flag_work, "diff", "--quiet", "--", "tracked.txt")
+                    try:
+                        flag_helper.publish(flag_parent)
+                    except ValueError as exc:
+                        assert "assume-unchanged or skip-worktree" in str(exc)
+                    else:
+                        raise AssertionError("flagged private index was accepted")
+                    flag_helper.cleanup()
+                    assert flag_helper.root.exists()
+                    assert real_git(repo, "rev-parse", "refs/heads/" + branch).decode().strip() == base
+                    assert real_git(sibling, "rev-parse", "HEAD").decode().strip() == sibling_head
+                finally:
+                    if flag_helper:
+                        flag_helper.restore()
+                    shutil.rmtree(flag_parent, ignore_errors=True)
+                    real_git(repo, "worktree", "remove", "--force", str(flag_work))
+                    real_git(repo, "branch", "-D", branch)
+
         # An extra ref is confined to the private store and makes publication fail.
         work2 = top / "unsafe-worktree"
         real_git(repo, "branch", "task-unsafe", base)
