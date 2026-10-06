@@ -11,7 +11,7 @@ import time
 
 ROOT = Path(sys.argv[1])
 sys.path.insert(0, str(ROOT / "bin"))
-from fm_codex_git import PrivateGit
+from fm_codex_git import PrivateGit, PrivateGitVerificationError
 
 
 def real_git(directory, *args):
@@ -84,7 +84,7 @@ def private_git_delivery_check():
                         real_git(flag_work, "diff", "--quiet", "--", "tracked.txt")
                     try:
                         flag_helper.publish(flag_parent)
-                    except ValueError as exc:
+                    except PrivateGitVerificationError as exc:
                         assert "assume-unchanged or skip-worktree" in str(exc)
                     else:
                         raise AssertionError("flagged private index was accepted")
@@ -188,7 +188,12 @@ def emit(x):
 def event(method, params):emit({'method':method,'params':params})
 def terminal(status):event('turn/completed',{'threadId':'thread','turn':{'id':'turn','status':status}})
 def tool(kind='progress',arguments=None,thread='thread',turn='turn',ident=100):
- if kind=='result': commit_ship()
+ if kind=='result':
+  commit_ship()
+  if mode in ('verification-refusal','verification-stale'):
+   subprocess.run(['git','-C',os.environ['CASE_WORKTREE'],'update-index','--assume-unchanged','tracked.txt'],check=True)
+  if mode=='publication-internal-error':
+   os.chmod('/dev/shm/firstmate-appserver/t',0o500)
  emit({'id':ident,'method':'item/tool/call','params':{'threadId':thread,'turnId':turn,'callId':str(ident),'tool':'firstmate_report','arguments':arguments or {'type':kind,'message':'delivery'}}})
 for line in sys.stdin:
  m=json.loads(line)
@@ -231,10 +236,7 @@ for line in sys.stdin:
    if mode=='scout-path':arguments['path']='../sibling/report.md'
    if mode=='scout-large':arguments['report']='x'*262145
    tool(arguments=arguments)
-  elif mode=='import-failure':
-   commit_ship()
-   private=subprocess.check_output(['git','-C',os.environ['CASE_WORKTREE'],'rev-parse','--absolute-git-dir'],text=True).strip()
-   open(os.path.join(private,'commondir'),'w').write('missing\n')
+  elif mode in ('verification-refusal','verification-stale','publication-internal-error'):
    tool('result')
   elif mode=='success-no-result':terminal('completed')
   elif mode=='working':tool()
@@ -262,6 +264,15 @@ for line in sys.stdin:
   elif mode=='scout-duplicate':
    assert m['result']['success'] is True
    tool(arguments={'type':'result','message':'overwrite','report':'WRONG'},ident=101)
+  elif mode=='verification-stale':
+   clean_env={k:v for k,v in os.environ.items() if not k.startswith('FM_')}
+   subprocess.check_output(['bash',os.path.join(os.environ['CASE_ROOT'],'bin/fm-busy-event.sh'),'arm',os.environ['CASE_STATE'],'t'],env=clean_env,text=True)
+   for name in ('t.status','t.busy-state'):
+    try:
+     with open(os.path.join(os.environ['CASE_STATE'],name),'rb') as source: data=source.read()
+    except FileNotFoundError: data=b'__MISSING__'
+    with open(os.path.join(os.environ['CASE_HOME'],'armed-'+name),'wb') as saved: saved.write(data)
+   terminal('completed')
   elif mode=='working':pass
   elif mode in ('decision','decision-held','decision-held-legacy','decision-large'):
    assert m['result']['contentItems'][0]['text']==('😀'*2048 if mode=='decision-large' else 'ANSWER')
@@ -295,7 +306,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
     (fakebin / 'tmux').chmod(0o755)
     env = dict(os.environ, PATH=str(fakebin)+':'+os.environ['PATH'])
     for case in ['scout-stale','scout-success','scout-missing','scout-path','scout-large','scout-duplicate','scout-preexisting','working','success','failed','interrupted','result-active','success-no-result',
-                 'wrong-thread','wrong-turn','sibling','unknown','bad-report','malformed','death','import-failure',
+                 'wrong-thread','wrong-turn','sibling','unknown','bad-report','malformed','death','verification-refusal','verification-stale','publication-internal-error',
                  'decision','decision-held','decision-held-legacy','decision-large','decision-death','decision-cancel','decision-backend-death','interrupt-error','interrupt-timeout','stale',
                  'duplicate-request','bad-json','bad-params','bad-turn','bad-response','oversized','large-report','bad-shape','unknown-tool']:
         home = top / case
@@ -345,7 +356,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
         def statuses():
             return log.read_text() if log.exists() else ''
         out = open(home/'output','w')
-        proc = subprocess.Popen(['python3',str(ROOT/'bin/fm-codex-appserver.py'),'run',str(state),'t',gen,str(home/'data'),str(brief),str(work)],env=dict(env,CASE=case,FM_HOME=str(home),FM_DATA_OVERRIDE=str(home/'ambient-data'),CASE_STATE=str(state),CASE_GEN=gen,CASE_WORKTREE=str(work)),stdout=out,stderr=out)
+        proc = subprocess.Popen(['python3',str(ROOT/'bin/fm-codex-appserver.py'),'run',str(state),'t',gen,str(home/'data'),str(brief),str(work)],env=dict(env,CASE=case,FM_HOME=str(home),FM_DATA_OVERRIDE=str(home/'ambient-data'),CASE_STATE=str(state),CASE_GEN=gen,CASE_WORKTREE=str(work),CASE_ROOT=str(ROOT),CASE_HOME=str(home)),stdout=out,stderr=out)
         try:
             if case == 'scout-stale':
                 proc.wait(timeout=10)
@@ -353,7 +364,33 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
                 assert 'done' not in statuses()
                 assert not (home/'data'/'t'/'report.md').exists()
                 (state/'t.busy-gen').write_text(gen+'\n')
-            elif case in ('import-failure','death','malformed','duplicate-request','bad-json','bad-params','bad-turn','bad-response','oversized'):
+            elif case == 'verification-refusal':
+                proc.wait(timeout=10)
+                assert proc.returncode == 0, (home/'output').read_text()
+                assert 'supervisor verification refused private Git publication [private-git-verification-refused]' in statuses(), statuses()+'\n'+busy.read_text()+'\n'+(home/'output').read_text()
+                assert 'state: failed' in crew()
+                assert 'event=turn-failed' in busy.read_text()
+                assert 'state=idle' in busy.read_text()
+                assert 'unknown' not in busy.read_text() and 'process-failed' not in busy.read_text()
+                assert 'done:' not in statuses() and 'state: done' not in crew()
+            elif case == 'verification-stale':
+                proc.wait(timeout=10)
+                assert proc.returncode != 0
+                current_gen=(state/'t.busy-gen').read_text()
+                assert current_gen != gen
+                for name in ('t.status','t.busy-state'):
+                    actual=(state/name).read_bytes() if (state/name).exists() else b'__MISSING__'
+                    assert actual == (home/('armed-'+name)).read_bytes()
+                assert 'failed:' not in statuses() and 'done:' not in statuses()
+            elif case == 'publication-internal-error':
+                proc.wait(timeout=10)
+                task_store_parent=Path('/dev/shm/firstmate-appserver/t')
+                if task_store_parent.exists(): os.chmod(task_store_parent,0o700)
+                assert proc.returncode != 0
+                assert 'state=unknown' in busy.read_text() and 'process-failed' in busy.read_text()
+                assert 'private-git-verification-refused' not in statuses()
+                assert 'done:' not in statuses()
+            elif case in ('death','malformed','duplicate-request','bad-json','bad-params','bad-turn','bad-response','oversized'):
                 proc.wait(timeout=10)
                 assert proc.returncode != 0
                 assert 'state=unknown' in busy.read_text()
@@ -490,12 +527,15 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
                     assert real_git(repo, 'rev-parse', branch).decode().strip() == head
                     assert real_git(work, 'show', 'HEAD:tracked.txt') == b'app-server delivery\n'
                     assert real_git(work, 'status', '--porcelain').strip() == b''
-                elif case in ('death','decision-cancel','decision-backend-death','failed','interrupted','import-failure','result-active','stale'):
-                    if case == 'import-failure':
-                        (private/'commondir').unlink()
+                elif case in ('death','decision-cancel','decision-backend-death','failed','interrupted','verification-refusal','verification-stale','publication-internal-error','result-active','stale'):
                     head = real_git(private, 'rev-parse', 'HEAD').decode().strip()
                     assert head != base
                     assert real_git(private, 'show', 'HEAD:tracked.txt') == b'app-server delivery\n'
+                    if case in ('verification-refusal','verification-stale'):
+                        assert real_git(private, 'ls-files', '-v').startswith(b'h tracked.txt')
+                    if case in ('verification-refusal','verification-stale','publication-internal-error'):
+                        assert subprocess.run(['git','-C',str(repo),'cat-file','-e',head],capture_output=True).returncode != 0
+                        assert real_git(repo, 'rev-parse', branch).decode().strip() == base
             output=(home/'output').read_text()
             server_pid=int(output.split('app-server started pid=')[1].splitlines()[0])
             try:
@@ -512,4 +552,6 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
                 proc.terminate();proc.wait(timeout=20)
             out.close()
             if not is_scout:
-                shutil.rmtree(Path('/dev/shm/firstmate-appserver/t') / gen, ignore_errors=True)
+                task_store_parent=Path('/dev/shm/firstmate-appserver/t')
+                if task_store_parent.exists(): os.chmod(task_store_parent,0o700)
+                shutil.rmtree(task_store_parent / gen, ignore_errors=True)

@@ -8,6 +8,10 @@ import subprocess
 import tempfile
 
 
+class PrivateGitVerificationError(ValueError):
+    """The task-private result failed an intentional publication check."""
+
+
 def _env():
     env = {key: value for key, value in os.environ.items()
            if not key.startswith("GIT_")}
@@ -122,40 +126,40 @@ class PrivateGit:
 
     def _verified_head(self):
         if self.root.is_symlink() or not self.root.is_dir():
-            raise ValueError("task-private Git root is unsafe")
+            raise PrivateGitVerificationError("task-private Git root is unsafe")
         for name in ("commondir", "gitdir", "config.worktree", "shallow",
                      "packed-refs", "info/grafts", "objects/info/alternates",
                      "objects/info/http-alternates"):
             path = self.root / name
             if path.is_symlink() or path.exists():
-                raise ValueError("task-private Git metadata redirection is not accepted")
+                raise PrivateGitVerificationError("task-private Git metadata redirection is not accepted")
         config = self.root / "config"
         if config.is_symlink() or not config.is_file() or hashlib.sha256(config.read_bytes()).digest() != self.config_hash:
-            raise ValueError("task-private Git configuration changed")
+            raise PrivateGitVerificationError("task-private Git configuration changed")
         ref_parts = Path(self.ref).parts
         ref_parent = self.root
         for part in ref_parts[:-1]:
             ref_parent = ref_parent / part
             if ref_parent.is_symlink() or not ref_parent.is_dir():
-                raise ValueError("task-private refs directory is unsafe")
+                raise PrivateGitVerificationError("task-private refs directory is unsafe")
         head_file = self.root / "HEAD"
         ref_file = ref_parent / ref_parts[-1]
         for path in (head_file, ref_file):
             if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
-                raise ValueError("task-private task ref is missing or unsafe")
+                raise PrivateGitVerificationError("task-private task ref is missing or unsafe")
         if head_file.read_text().strip() != "ref: " + self.ref:
-            raise ValueError("task-private HEAD is not the assigned task branch")
+            raise PrivateGitVerificationError("task-private HEAD is not the assigned task branch")
         oid = ref_file.read_text().strip()
         if not re.fullmatch("[0-9a-f]{" + str(len(self.base)) + "}", oid) or oid == self.base:
-            raise ValueError("task-private HEAD is invalid or has no ship commit")
+            raise PrivateGitVerificationError("task-private HEAD is invalid or has no ship commit")
         refs = []
         for directory, dirs, files in os.walk(self.root / "refs", followlinks=False):
             directory = Path(directory)
             if any((directory / name).is_symlink() for name in dirs + files):
-                raise ValueError("task-private refs contain symlinks")
+                raise PrivateGitVerificationError("task-private refs contain symlinks")
             refs.extend(str((directory / name).relative_to(self.root)) for name in files)
         if refs != [self.ref]:
-            raise ValueError("task-private Git contains unrelated refs")
+            raise PrivateGitVerificationError("task-private Git contains unrelated refs")
         return oid
 
     def publish(self, snapshot_parent):
@@ -167,25 +171,28 @@ class PrivateGit:
             for directory, dirs, files in os.walk(source, followlinks=False):
                 directory = Path(directory)
                 if directory.is_symlink() or any((directory / name).is_symlink() for name in dirs):
-                    raise ValueError("private object directory contains symlink")
+                    raise PrivateGitVerificationError("private object directory contains symlink")
                 relative = directory.relative_to(source)
                 target = snapshot / "objects" / relative
                 target.mkdir(exist_ok=True)
                 for name in files:
                     path = directory / name
                     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
-                        raise ValueError("private object is not an isolated regular file")
+                        raise PrivateGitVerificationError("private object is not an isolated regular file")
                     if relative == Path("info"):
                         continue
                     shutil.copyfile(path, target / name)
             index = self.root / "index"
             if index.is_symlink() or not index.is_file() or index.stat().st_nlink != 1:
-                raise ValueError("task-private index is unsafe")
+                raise PrivateGitVerificationError("task-private index is unsafe")
             shutil.copyfile(index, snapshot / "index")
-            flags = git_dir(snapshot, "ls-files", "-v", "-z").split(b"\0")
+            try:
+                flags = git_dir(snapshot, "ls-files", "-v", "-z").split(b"\0")
+            except subprocess.CalledProcessError as exc:
+                raise PrivateGitVerificationError("task-private index is invalid") from exc
             if any(entry and (entry[:1].islower() or entry[:1].upper() == b"S")
                    for entry in flags):
-                raise ValueError("task-private index contains assume-unchanged or skip-worktree entries")
+                raise PrivateGitVerificationError("task-private index contains assume-unchanged or skip-worktree entries")
             git(snapshot, "update-ref", self.ref, oid)
             git(snapshot, "symbolic-ref", "HEAD", self.ref)
             for args in (("diff", "--quiet", "--no-ext-diff", "--no-textconv", oid, "--"),
@@ -194,10 +201,20 @@ class PrivateGit:
                     git_dir(snapshot, "--work-tree=" + str(self.worktree),
                             "-c", "core.bare=false", "-c", "core.fsmonitor=false", *args)
                 except subprocess.CalledProcessError as exc:
-                    raise ValueError("task-private worktree has uncommitted tracked changes") from exc
-            git(snapshot, "cat-file", "-e", oid + "^{commit}")
-            git(snapshot, "merge-base", "--is-ancestor", self.base, oid)
-            git(snapshot, "fsck", "--strict", "--no-reflogs", oid)
+                    raise PrivateGitVerificationError(
+                        "task-private worktree has uncommitted tracked changes") from exc
+            checks = (
+                (("cat-file", "-e", oid + "^{commit}"), "task-private HEAD is not a commit"),
+                (("merge-base", "--is-ancestor", self.base, oid),
+                 "task-private commit does not descend from its base"),
+                (("fsck", "--strict", "--no-reflogs", oid),
+                 "task-private commit failed integrity verification"),
+            )
+            for args, reason in checks:
+                try:
+                    git(snapshot, *args)
+                except subprocess.CalledProcessError as exc:
+                    raise PrivateGitVerificationError(reason) from exc
             pack = git(snapshot, "pack-objects", "--stdout", "--revs",
                        data=(oid + "\n").encode())
             # This process is outside the worker sandbox. CAS refuses a branch

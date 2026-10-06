@@ -22,7 +22,7 @@ import threading
 import time
 
 BIN = Path(__file__).resolve().parent
-from fm_codex_git import PrivateGit
+from fm_codex_git import PrivateGit, PrivateGitVerificationError
 REPORT_LIMIT = 262144
 LIMIT = 8192
 # JSON can encode each accepted input byte as a six-byte escape. Include
@@ -276,7 +276,16 @@ class Adapter:
             self.terminal = status
             if status == "completed" and self.result is not None:
                 if self.private_git is not None:
-                    oid = self.private_git.publish(self.private_root.parent)
+                    try:
+                        oid = self.private_git.publish(self.private_root.parent)
+                    except PrivateGitVerificationError:
+                        self.result = None
+                        self.terminal = "failed"
+                        self.report("failed: supervisor verification refused private Git publication "
+                                    "[private-git-verification-refused]")
+                        self.busy("idle", "turn-failed")
+                        self.stopping = True
+                        return
                     self.result += " (task commit " + oid[:12] + ")"
                 self.report("done: " + self.result)
             elif status != "completed":
