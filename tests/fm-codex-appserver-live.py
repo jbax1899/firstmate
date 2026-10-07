@@ -10,8 +10,13 @@ import subprocess
 import sys
 import tempfile
 import time
+from importlib.util import module_from_spec, spec_from_file_location
 
 root = Path(sys.argv[1]).resolve()
+plan_spec = spec_from_file_location('live_plan', root/'tests/fm-codex-appserver-live-plan.py')
+plan = module_from_spec(plan_spec)
+plan_spec.loader.exec_module(plan)
+scenarios = plan.parse_scenarios(sys.argv[2:])
 lab = Path(tempfile.mkdtemp(prefix='fm-as-canary-'))
 env = {k: v for k, v in os.environ.items() if not k.startswith('FM_') and k not in ('TMUX','TMUX_PANE','TASKS_AXI_FILE','TASKS_AXI_BACKEND')}
 env['FM_HOME'] = str(lab)
@@ -45,6 +50,10 @@ def status(task):
 def log(task):
     path=lab/'state'/f'{task}.status'
     return path.read_text() if path.exists() else ''
+
+
+def metadata(task):
+    return dict(line.split('=',1) for line in (lab/'state'/f'{task}.meta').read_text().splitlines() if '=' in line)
 
 
 def capture(task):
@@ -152,103 +161,116 @@ finally:
 print(json.dumps(result))
 Path('security-proof.json').write_text(json.dumps(result))
 PYSEC""".replace('PROBES',repr({name:str(path) for name,path in probes.items()})).replace('SOCKETS',repr(str(lab/'state/.appserver-*.sock'))).replace('NETWORK_PORT',str(network.getsockname()[1]))
-    spawn('success','Call firstmate_report progress CANARY_STARTED. Execute sleep 15 for an active steer. Then execute this exact harmless sandbox check:\n'+command+'\nWrite ship.txt with UNIQUE_SHIP_CONTENT, git add ship.txt positive-control security-proof.json, and git commit on the already provisioned branch. Write git rev-parse HEAD to the untracked file expected-head. Then call firstmate_report needs-decision CANARY_QUESTION and wait for the answer. Finally report result including the steer marker, answer, and security outcomes. Do not push, merge, create PRs or write FirstMate state.',ship=True)
-    wait(lambda:'state: working' in status('success'),'working projection')
-    steer=fm('fm-send.sh','success','Include UNIQUE_STEER_418 in the final result. Continue the brief.')
-    turn=steer.split()[-1]
-    print('ok - live steer '+turn,flush=True)
-    wait(lambda:'needs-decision' in log('success'),'decision opens')
-    assert 'state: parked' in status('success')
-    assert 'done' not in log('success')
-    key=re.search(r'\[key=([^]]+)\]',log('success')).group(1)
-    assert fm('fm-send.sh','success','late ordinary steer',check=False).returncode!=0
-    meta=dict(line.split('=',1) for line in (lab/'state/success.meta').read_text().splitlines() if '=' in line)
-    work=Path(meta['worktree'])
-    expected=(work/'expected-head').read_text().strip()
-    assert re.fullmatch('[0-9a-f]{40,64}',expected) and expected!=base
-    private=Path(run('git','rev-parse','--absolute-git-dir',cwd=work))
-    assert os.stat(private).st_dev!=os.stat(project).st_dev
-    assert run('git','rev-parse','HEAD',cwd=work)==expected
-    assert run('git','cat-file','-e',expected,cwd=project,check=False).returncode!=0
-    assert run('git','show-ref','--verify','refs/heads/'+meta['branch'],cwd=project,check=False).returncode!=0
-    fm('fm-send.sh','success','--resolve-key',key,'UNIQUE_ANSWER_73921')
-    assert fm('fm-send.sh','success','--resolve-key',key,'duplicate',check=False).returncode!=0
-    wait(lambda:'state: done' in status('success'),'same-turn completion')
-    assert 'UNIQUE_STEER_418' in log('success') and 'UNIQUE_ANSWER_73921' in log('success')
-    trace=capture('success')
-    assert '"id": "'+turn+'"' in trace and '"status": "completed"' in trace
-    meta=dict(line.split('=',1) for line in (lab/'state/success.meta').read_text().splitlines() if '=' in line)
-    proof=json.loads((Path(meta['worktree'])/'security-proof.json').read_text())
-    assert proof['workspace']=='WORKSPACE_OK'
-    assert all(proof[name] in ('DENIED:1','DENIED:13','DENIED:30') for name in probes)
-    assert proof['socket'] in ('DENIED:1','DENIED:13')
-    assert proof['network'] in ('DENIED:1','DENIED:13')
-    assert all(path.read_bytes()==before[name] for name,path in probes.items())
-    assert run('git','rev-parse',meta['branch'],cwd=project)==expected
-    assert run('git','rev-parse','HEAD',cwd=work)==expected
-    assert run('git','show',expected+':ship.txt',cwd=project)=='UNIQUE_SHIP_CONTENT'
-    assert run('git','rev-parse','main',cwd=project)==base
-    assert run('git','rev-parse','HEAD',cwd=sibling)==base
-    assert sentinel.read_text()=='PRESERVE\n'
-    assert 'commandExecution' in trace and 'DENIED' in trace
-    assert fm('fm-send.sh','success','after completion',check=False).returncode!=0
-    (lab/'success-trace.txt').write_text(trace)
-    print('ok - live kernel sandbox denial '+json.dumps(proof),flush=True)
-    stop('success')
-    assert not private.exists()
+    if scenarios is None:
+        spawn('success','Call firstmate_report progress CANARY_STARTED. Execute sleep 15 for an active steer. Then execute this exact harmless sandbox check:\n'+command+'\nWrite ship.txt with UNIQUE_SHIP_CONTENT, git add ship.txt positive-control security-proof.json, and git commit on the already provisioned branch. Write git rev-parse HEAD to the untracked file expected-head. Then call firstmate_report needs-decision CANARY_QUESTION and wait for the answer. Finally report result including the steer marker, answer, and security outcomes. Do not push, merge, create PRs or write FirstMate state.',ship=True)
+        wait(lambda:'state: working' in status('success'),'working projection')
+        steer=fm('fm-send.sh','success','Include UNIQUE_STEER_418 in the final result. Continue the brief.')
+        turn=steer.split()[-1]
+        print('ok - live steer '+turn,flush=True)
+        wait(lambda:'needs-decision' in log('success'),'decision opens')
+        assert 'state: parked' in status('success')
+        assert 'done' not in log('success')
+        key=re.search(r'\[key=([^]]+)\]',log('success')).group(1)
+        assert fm('fm-send.sh','success','late ordinary steer',check=False).returncode!=0
+        meta=dict(line.split('=',1) for line in (lab/'state/success.meta').read_text().splitlines() if '=' in line)
+        work=Path(meta['worktree'])
+        expected=(work/'expected-head').read_text().strip()
+        assert re.fullmatch('[0-9a-f]{40,64}',expected) and expected!=base
+        private=Path(run('git','rev-parse','--absolute-git-dir',cwd=work))
+        assert os.stat(private).st_dev!=os.stat(project).st_dev
+        assert run('git','rev-parse','HEAD',cwd=work)==expected
+        assert run('git','cat-file','-e',expected,cwd=project,check=False).returncode!=0
+        assert run('git','show-ref','--verify','refs/heads/'+meta['branch'],cwd=project,check=False).returncode!=0
+        fm('fm-send.sh','success','--resolve-key',key,'UNIQUE_ANSWER_73921')
+        assert fm('fm-send.sh','success','--resolve-key',key,'duplicate',check=False).returncode!=0
+        wait(lambda:'state: done' in status('success'),'same-turn completion')
+        assert 'UNIQUE_STEER_418' in log('success') and 'UNIQUE_ANSWER_73921' in log('success')
+        trace=capture('success')
+        assert '"id": "'+turn+'"' in trace and '"status": "completed"' in trace
+        meta=dict(line.split('=',1) for line in (lab/'state/success.meta').read_text().splitlines() if '=' in line)
+        proof=json.loads((Path(meta['worktree'])/'security-proof.json').read_text())
+        assert proof['workspace']=='WORKSPACE_OK'
+        assert all(proof[name] in ('DENIED:1','DENIED:13','DENIED:30') for name in probes)
+        assert proof['socket'] in ('DENIED:1','DENIED:13')
+        assert proof['network'] in ('DENIED:1','DENIED:13')
+        assert all(path.read_bytes()==before[name] for name,path in probes.items())
+        assert run('git','rev-parse',meta['branch'],cwd=project)==expected
+        assert run('git','rev-parse','HEAD',cwd=work)==expected
+        assert run('git','show',expected+':ship.txt',cwd=project)=='UNIQUE_SHIP_CONTENT'
+        assert run('git','rev-parse','main',cwd=project)==base
+        assert run('git','rev-parse','HEAD',cwd=sibling)==base
+        assert sentinel.read_text()=='PRESERVE\n'
+        assert 'commandExecution' in trace and 'DENIED' in trace
+        assert fm('fm-send.sh','success','after completion',check=False).returncode!=0
+        (lab/'success-trace.txt').write_text(trace)
+        print('ok - live kernel sandbox denial '+json.dumps(proof),flush=True)
+        stop('success')
+        assert not private.exists()
     (lab/'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
     (lab/'config/backlog-backend').write_text('markdown\n')
-    spawn('scout','Call firstmate_report needs-decision SCOUT_HELD_QUESTION and wait for the answer. Then call firstmate_report result with message UNIQUE_SCOUT_RESULT and a complete Markdown report of at least 2000 characters containing UNIQUE_SCOUT_REPORT and the answer. Do not commit or write fleet files.')
-    wait(lambda:'needs-decision' in log('scout'),'scout decision opens')
-    key=re.search(r'\[key=([^]]+)\]',log('scout')).group(1)
-    fm('fm-captain-hold.sh','hold',key,'--title','Canary decision','--reason','Choose','--origin','scout')
-    fm('fm-captain-hold.sh','complete','scout',key)
-    real_tasks=shutil.which('tasks-axi')
-    assert real_tasks, 'tasks-axi is required for held-answer canary'
-    fakebin=lab/'failure-bin'
-    fakebin.mkdir()
-    wrapper=fakebin/'tasks-axi'
-    wrapper.write_text('#!/bin/sh\nfor arg do\n if [ "$arg" = done ]; then exit 42; fi\ndone\nexec '+shlex.quote(real_tasks)+' "$@"\n')
-    wrapper.chmod(0o755)
-    old_path=env['PATH']
-    try:
-        env['PATH']=str(fakebin)+':'+old_path
-        assert fm('fm-send.sh','scout','--resolve-key',key,'UNIQUE_HELD_ANSWER',check=False).returncode!=0
-    finally:
-        env['PATH']=old_path
-    time.sleep(1)
-    assert 'state: done' not in status('scout')
-    assert not (lab/'data/scout/report.md').exists()
-    fm('fm-captain-hold.sh','open',key)
-    fm('fm-send.sh','scout','--resolve-key',key,'UNIQUE_HELD_ANSWER')
-    assert fm('fm-captain-hold.sh','open',key,check=False).returncode in (1,3)
-    assert fm('fm-send.sh','scout','--resolve-key',key,'duplicate',check=False).returncode!=0
-    wait(lambda:'state: done' in status('scout'),'scout publication after held-answer retry')
-    report=lab/'data/scout/report.md'
-    report_body=report.read_bytes()
-    assert len(report_body)>2000 and b'UNIQUE_SCOUT_REPORT' in report_body and b'UNIQUE_HELD_ANSWER' in report_body
-    assert sibling_report.read_bytes()==before['sibling_report']
-    (lab/'scout-trace.txt').write_text(capture('scout'))
-    stop('scout')
-    fm('fm-teardown.sh','scout',timeout=120)
-    assert report.read_bytes()==report_body
-    assert not (lab/'state/scout.meta').exists()
-    assert re.search(r'^\s*state: done$',fm('fm-tasks-axi.sh','show','scout'),re.MULTILINE)
-    print('ok - live scout report survives teardown and held-answer retry',flush=True)
-    spawn('failure','Do not execute commands.','firstmate-deliberately-unavailable')
-    wait(lambda:'state: failed' in status('failure'),'failed turn never complete')
-    assert 'done' not in log('failure')
-    (lab/'failure-trace.txt').write_text(capture('failure'))
-    stop('failure')
-    spawn('cancel','Call firstmate_report needs-decision WAIT_FOR_CANCEL and wait. Do not use shell tools.')
-    wait(lambda:'state: parked' in status('cancel'),'cancel pending decision')
-    stop('cancel')
-    assert 'state: failed' in status('cancel') and 'done' not in log('cancel')
-    (lab/'cancel-trace.txt').write_text(capture('cancel'))
-    assert '"status": "interrupted"' in capture('cancel')
-    assert 'resolved [key=' in log('cancel')
-    assert not list((lab/'state').glob('*.sock'))
-    print('ok - live cancellation retires callbacks and reaps app-server',flush=True)
+    if plan.selected('scout-success', scenarios):
+        spawn('scout','Call firstmate_report needs-decision SCOUT_HELD_QUESTION and wait for the answer. Then call firstmate_report result with message UNIQUE_SCOUT_RESULT and a complete Markdown report of at least 2000 characters containing UNIQUE_SCOUT_REPORT and the answer. Do not commit or write fleet files.')
+        wait(lambda:'needs-decision' in log('scout'),'scout decision opens')
+        key=re.search(r'\[key=([^]]+)\]',log('scout')).group(1)
+        fm('fm-captain-hold.sh','hold',key,'--title','Canary decision','--reason','Choose','--origin','scout')
+        fm('fm-captain-hold.sh','complete','scout',key)
+        real_tasks=shutil.which('tasks-axi')
+        assert real_tasks, 'tasks-axi is required for held-answer canary'
+        fakebin=lab/'failure-bin'
+        fakebin.mkdir()
+        wrapper=fakebin/'tasks-axi'
+        wrapper.write_text('#!/bin/sh\nfor arg do\n if [ "$arg" = done ]; then exit 42; fi\ndone\nexec '+shlex.quote(real_tasks)+' "$@"\n')
+        wrapper.chmod(0o755)
+        old_path=env['PATH']
+        try:
+            env['PATH']=str(fakebin)+':'+old_path
+            assert fm('fm-send.sh','scout','--resolve-key',key,'UNIQUE_HELD_ANSWER',check=False).returncode!=0
+        finally:
+            env['PATH']=old_path
+        time.sleep(1)
+        assert 'state: done' not in status('scout')
+        report=lab/'data/scout/report.md'
+        assert not report.exists()
+        fm('fm-captain-hold.sh','open',key)
+        fm('fm-send.sh','scout','--resolve-key',key,'UNIQUE_HELD_ANSWER')
+        assert fm('fm-captain-hold.sh','open',key,check=False).returncode in (1,3)
+        assert fm('fm-send.sh','scout','--resolve-key',key,'duplicate',check=False).returncode!=0
+        wait(lambda:'state: done' in status('scout'),'scout publication after held-answer retry')
+        report_body=report.read_bytes()
+        assert list(report.parent.glob('report.md'))==[report]
+        assert len(report_body)>2000 and b'UNIQUE_SCOUT_REPORT' in report_body and b'UNIQUE_HELD_ANSWER' in report_body
+        assert sibling_report.read_bytes()==before['sibling_report']
+        scout_meta=metadata('scout')
+        assert scout_meta['endpoint_task_id']=='scout' and scout_meta['kind']=='scout'
+        assert scout_meta['busy_gen']==(lab/'state/scout.busy-gen').read_text().strip()
+        (lab/'scout-trace.txt').write_text(capture('scout'))
+        stop('scout')
+        fm('fm-teardown.sh','scout',timeout=120)
+        assert report.read_bytes()==report_body
+        assert not (lab/'state/scout.meta').exists()
+        assert re.search(r'^\s*state: done$',fm('fm-tasks-axi.sh','show','scout'),re.MULTILINE)
+        print('ok - live scout report survives teardown and held-answer retry',flush=True)
+    if plan.selected('scout-failure', scenarios):
+        spawn('failure','Do not execute commands.','firstmate-deliberately-unavailable')
+        wait(lambda:'state: failed' in status('failure'),'failed turn never complete')
+        report=lab/'data/failure/report.md'
+        assert not report.exists()
+        assert 'done' not in log('failure')
+        (lab/'failure-trace.txt').write_text(capture('failure'))
+        stop('failure')
+    if plan.selected('scout-interrupt', scenarios):
+        spawn('cancel','Call firstmate_report result with message UNIQUE_INTERRUPT_RESULT and a complete Markdown report of at least 2000 characters containing UNIQUE_INTERRUPT_REPORT. Then execute touch cancel-report-submitted && sleep 60. Do not write fleet files.')
+        work=Path(metadata('cancel')['worktree'])
+        wait(lambda:(work/'cancel-report-submitted').exists(),'scout report submitted before interruption')
+        report=lab/'data/cancel/report.md'
+        assert not report.exists()
+        stop('cancel')
+        assert 'state: failed' in status('cancel') and 'done' not in log('cancel')
+        assert not report.exists()
+        (lab/'cancel-trace.txt').write_text(capture('cancel'))
+        assert '"status": "interrupted"' in capture('cancel')
+        assert not list((lab/'state').glob('*.sock'))
+        print('ok - live scout interruption suppresses its submitted report and reaps app-server',flush=True)
     print('CANARY_PASS evidence='+str(lab),flush=True)
 finally:
     network.close()
