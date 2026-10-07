@@ -1,0 +1,15 @@
+treehouse get
+jordan@DESKTOP:/tmp/fm-as-canary-6htenap1/projects/canary$ treehouse get
+A new version of treehouse is available: v2.3.0 → v3.1.2
+Run "treehouse update" to update
+
+🌳 Setting up worktree...
+🌳 Entered worktree at /tmp/fm-as-canary-6htenap1/projects/canary/.treehouse/canary-964293/1/canary. Type 'exit' to return.
+jordan@DESKTOP:/tmp/fm-as-canary-6htenap1/projects/canary/.treehouse/canary-964293/1/canary$ cd -- '/tmp/fm-as-canary-6htenap1/projects/canary/.treehouse/canary-964293/1/canary'
+jordan@DESKTOP:/tmp/fm-as-canary-6htenap1/projects/canary/.treehouse/canary-964293/1/canary$ export GOTMPDIR=/tmp/fm-failure/gotmp
+jordan@DESKTOP:/tmp/fm-as-canary-6htenap1/projects/canary/.treehouse/canary-964293/1/canary$ export COMPACT_ADVISER_DISABLE=1
+jordan@DESKTOP:/tmp/fm-as-canary-6htenap1/projects/canary/.treehouse/canary-964293/1/canary$ export FM_TASK_ID=failure
+jordan@DESKTOP:/tmp/fm-as-canary-6htenap1/projects/canary/.treehouse/canary-964293/1/canary$ . '/tmp/fm-failure+2b694e64f19dd13ecff3a9b4ab4255c4a28d40713ff4c3505270e5adf013f9f6/launch.s1791350798.62379.10204.sh'
+app-server started pid=63527
+{"method": "turn/started", "params": {"threadId": "01a114d3-fbe6-7de3-8fc1-08f2e6573e29", "turn": {"id": "01a114d3-fc53-7242-b9a6-9640c7dc9e5e", "items": [], "itemsView": "notLoaded", "status": "inProgress", "error": null, "startedAt": 1791350799, "completedAt": null, "durationMs": null}}}
+{"method": "turn/completed", "params": {"threadId": "01a114d3-fbe6-7de3-8fc1-08f2e6573e29", "turn": {"id": "01a114d3-fc53-7242-b9a6-9640c7dc9e5e", "items": [], "itemsView": "notLoaded", "status": "failed", "error": {"message": "{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'firstmate-deliberately-unavailable' model is not supported when using Codex with a ChatGPT account.\"}}", "codexErrorInfo": "other", "additionalDetails": null, "misalignment": null}, "startedAt": 1791350799, "completedAt": 1791350801, "durationMs": 1869}}}

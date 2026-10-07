@@ -1,0 +1,17 @@
+spawned scout harness=codex kind=scout window=firstmate:fm-scout worktree=/tmp/fm-as-canary-6htenap1/projects/canary/.treehouse/canary-964293/1/canary
+ok - live scout decision opens
+ok - live scout publication after held-answer retry
+stopped app-server pid=49939 exit=0
+ok - live idempotent exit
+ok - live scout report survives teardown and held-answer retry
+spawned failure harness=codex kind=scout window=firstmate:fm-failure worktree=/tmp/fm-as-canary-6htenap1/projects/canary/.treehouse/canary-964293/1/canary
+ok - live failed turn never complete
+stopped app-server pid=63527 exit=0
+ok - live idempotent exit
+spawned cancel harness=codex kind=scout window=firstmate:fm-cancel worktree=/tmp/fm-as-canary-6htenap1/projects/canary/.treehouse/canary-964293/2/canary
+ok - live scout report submitted before interruption
+stopped app-server pid=66063 exit=0
+ok - live idempotent exit
+ok - live scout interruption suppresses its submitted report and reaps app-server
+CANARY_PASS evidence=/tmp/fm-as-canary-6htenap1
+Retained disposable task evidence: /tmp/fm-as-canary-6htenap1

@@ -1,0 +1,6 @@
+Live Codex app-server scout canary outcomes
+Run: python3 tests/fm-codex-appserver-live.py "$PWD" --scenario scout-success --scenario scout-failure --scenario scout-interrupt
+Success: held-answer failure left report absent and task incomplete; retry published one report, checked task/generation metadata, and teardown removed task metadata while preserving the completed report. See codex-scout-success-trace.txt and codex-scout-report.md.
+Failure: turn failed, no report was published, and no completed projection was recorded. See codex-scout-failure-trace.txt.
+Interruption: report submission was observed before interruption; no report was published, task was not completed, interruption was observed, and app-server/socket cleanup succeeded. See codex-scout-interrupt-trace.txt.
+Published report bytes: 3294
