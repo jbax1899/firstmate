@@ -16,7 +16,8 @@ Correlated `inProgress` events publish verified busy evidence through the existi
 Transport death invalidates lifecycle evidence and never implies success.
 A structured result becomes eligible for existing delivery reconciliation only after correlated terminal success; neither result text nor a successful turn alone establishes task completion.
 
-Workers report through one client-owned `firstmate_report` dynamic tool accepting only `type` (`progress`, `needs-decision`, or `result`) and a bounded single-line `message`.
+Workers report through one client-owned `firstmate_report` dynamic tool accepting `type` (`progress`, `needs-decision`, or `result`) and a single-line `message` of up to 500 UTF-8 bytes, plus an optional `report` field of up to 262,144 UTF-8 bytes on scout `result` calls.
+The adapter publishes scout report content to the canonical task report path only after correlated terminal success.
 The adapter rejects identity/path selectors, additional fields, unknown operations, stale generations, and foreign thread/turn callbacks.
 Canonical writes occur on the supervisor side under the busy generation lock.
 The workspace-write sandbox grants only the worker workspace, disables network access and implicit temporary-directory write roots, and denies approval requests.
