@@ -11,7 +11,7 @@ import time
 
 ROOT = Path(sys.argv[1])
 sys.path.insert(0, str(ROOT / "bin"))
-from fm_codex_git import PrivateGit, PrivateGitVerificationError
+from fm_codex_git import PrivateGit, PrivateGitCapacityError, PrivateGitVerificationError
 
 
 def real_git(directory, *args):
@@ -43,7 +43,7 @@ def private_git_delivery_check():
         private_parent = Path(tempfile.mkdtemp(prefix="fm-private-git-", dir="/dev/shm"))
         helper = None
         try:
-            helper = PrivateGit(work, private_parent / "task", "task-ship")
+            helper = PrivateGit(work, private_parent / "gen-1", "task-ship", "task", "gen-1")
             assert os.stat(private_parent).st_dev != os.stat(repo).st_dev
             assert real_git(work, "branch", "--show-current").decode().strip() == "task-ship"
             (work / "tracked.txt").write_text("task change\n")
@@ -62,6 +62,42 @@ def private_git_delivery_check():
             if helper:
                 helper.restore()
             shutil.rmtree(private_parent, ignore_errors=True)
+        # A killed adapter leaves the pointer private. Only its exact owner may
+        # restore the canonical pointer, and recovery preserves the private store.
+        recovery_branch = "task-recovery"
+        recovery_work = top / "recovery-worktree"
+        real_git(repo, "branch", recovery_branch, base)
+        real_git(repo, "worktree", "add", "--quiet", str(recovery_work), recovery_branch)
+        recovery_parent = Path(tempfile.mkdtemp(prefix="fm-private-git-recovery-", dir="/dev/shm"))
+        recovery_root = recovery_parent / "gen-1"
+        original_recovery_pointer = (recovery_work / ".git").read_bytes()
+        code = ("import os,sys;sys.path.insert(0,sys.argv[1]);"
+                "from fm_codex_git import PrivateGit;"
+                "PrivateGit(sys.argv[2],sys.argv[3],'task-recovery','task','gen-1');os._exit(0)")
+        crashed = subprocess.run([sys.executable, "-c", code, str(ROOT / "bin"),
+                                  str(recovery_work), str(recovery_root)], check=False)
+        assert crashed.returncode == 0
+        private_pointer = ("gitdir: " + str(recovery_root) + "\n").encode()
+        assert (recovery_work / ".git").read_bytes() == private_pointer
+        try:
+            PrivateGit(recovery_work, recovery_root, recovery_branch, "other-task", "gen-1")
+        except ValueError as exc:
+            assert "another task or generation" in str(exc)
+        else:
+            raise AssertionError("a different task recovered the stale pointer")
+        assert (recovery_work / ".git").read_bytes() == private_pointer
+        try:
+            PrivateGit(recovery_work, recovery_root, recovery_branch, "task", "gen-1")
+        except ValueError as exc:
+            assert "recovered stale task-private Git pointer" in str(exc)
+        else:
+            raise AssertionError("a fresh operation did not report stale-pointer recovery")
+        assert (recovery_work / ".git").read_bytes() == original_recovery_pointer
+        assert recovery_root.is_dir()
+        assert real_git(sibling, "rev-parse", "HEAD").decode().strip() == sibling_head
+        shutil.rmtree(recovery_parent, ignore_errors=True)
+        real_git(repo, "worktree", "remove", "--force", str(recovery_work))
+        real_git(repo, "branch", "-D", recovery_branch)
         # Index flags fail closed even when Git's ordinary diff hides the edit.
         for flag, expected_tag in (("assume-unchanged", b"h"),
                                    ("skip-worktree", b"S")):
@@ -73,7 +109,7 @@ def private_git_delivery_check():
                 flag_parent = Path(tempfile.mkdtemp(prefix="fm-private-git-flag-", dir="/dev/shm"))
                 flag_helper = None
                 try:
-                    flag_helper = PrivateGit(flag_work, flag_parent / "task", branch)
+                    flag_helper = PrivateGit(flag_work, flag_parent / "gen-1", branch, "task", "gen-1")
                     (flag_work / "tracked.txt").write_text("task commit\n")
                     real_git(flag_work, "add", "tracked.txt")
                     real_git(flag_work, "commit", "--quiet", "-m", "task delivery")
@@ -106,7 +142,7 @@ def private_git_delivery_check():
         private_parent2 = Path(tempfile.mkdtemp(prefix="fm-private-git-", dir="/dev/shm"))
         helper2 = None
         try:
-            helper2 = PrivateGit(work2, private_parent2 / "task", "task-unsafe")
+            helper2 = PrivateGit(work2, private_parent2 / "gen-1", "task-unsafe", "task", "gen-1")
             (work2 / "tracked.txt").write_text("unsafe change\n")
             real_git(work2, "add", "tracked.txt")
             real_git(work2, "commit", "--quiet", "-m", "task delivery")
@@ -170,7 +206,83 @@ def private_git_delivery_check():
             shutil.rmtree(private_parent2, ignore_errors=True)
 
 
+def private_git_capacity_failure_check():
+    with tempfile.TemporaryDirectory(prefix="fm-private-git-capacity-") as tmp:
+        top = Path(tmp)
+        repo = top / "repo"
+        repo.mkdir()
+        real_git(repo, "init", "--quiet", "-b", "main")
+        real_git(repo, "config", "user.name", "FirstMate Test")
+        real_git(repo, "config", "user.email", "fm-test@example.invalid")
+        (repo / "tracked.txt").write_text("base\n")
+        real_git(repo, "add", "tracked.txt")
+        real_git(repo, "commit", "--quiet", "-m", "base")
+        base = real_git(repo, "rev-parse", "HEAD").decode().strip()
+        branch = "task-import-failure"
+        real_git(repo, "branch", branch, base)
+        work = top / "worktree"
+        real_git(repo, "worktree", "add", "--quiet", str(work), branch)
+        private_parent = Path(tempfile.mkdtemp(prefix="fm-private-git-capacity-", dir="/dev/shm"))
+        helper = None
+        try:
+            real_git_path = shutil.which("git")
+            wrapper_dir = top / "full-bin"
+            wrapper_dir.mkdir()
+            wrapper = wrapper_dir / "git"
+            wrapper.write_text("#!/usr/bin/env python3\nimport os,sys\n"
+                "if 'index-pack' in sys.argv:\n"
+                " sys.stderr.write('fatal: No space left on device\\n'); sys.exit(1)\n"
+                "os.execv(" + repr(real_git_path) + ", [" + repr(real_git_path) + ", *sys.argv[1:]])\n")
+            wrapper.chmod(0o755)
+            previous_path = os.environ["PATH"]
+            failed_root = private_parent / "setup-failure"
+            original_pointer = (work / ".git").read_bytes()
+            canonical_refs = real_git(repo, "for-each-ref", "--format=%(refname) %(objectname)")
+            try:
+                os.environ["PATH"] = str(wrapper_dir) + os.pathsep + previous_path
+                try:
+                    PrivateGit(work, failed_root, branch, "task", "setup-failure")
+                except PrivateGitCapacityError as exc:
+                    assert "available storage" in str(exc)
+                else:
+                    raise AssertionError("setup capacity failure was not reported")
+            finally:
+                os.environ["PATH"] = previous_path
+            assert failed_root.is_dir()
+            assert real_git(repo, "for-each-ref", "--format=%(refname) %(objectname)") == canonical_refs
+            assert (work / ".git").read_bytes() == original_pointer
+            shutil.rmtree(failed_root)
+            helper = PrivateGit(work, private_parent / "gen-1", branch, "task", "gen-1")
+            (work / "tracked.txt").write_text("retained after import failure\n")
+            real_git(work, "add", "tracked.txt")
+            real_git(work, "commit", "--quiet", "-m", "task delivery")
+            private_head = real_git(work, "rev-parse", "HEAD").decode().strip()
+            canonical_refs = real_git(repo, "for-each-ref", "--format=%(refname) %(objectname)")
+            try:
+                os.environ["PATH"] = str(wrapper_dir) + os.pathsep + previous_path
+                try:
+                    helper.publish(private_parent)
+                except PrivateGitCapacityError as exc:
+                    assert "available storage" in str(exc)
+                else:
+                    raise AssertionError("capacity failure was not reported")
+            finally:
+                os.environ["PATH"] = previous_path
+            assert real_git(repo, "for-each-ref", "--format=%(refname) %(objectname)") == canonical_refs
+            assert helper.root.is_dir()
+            assert real_git(helper.root, "show", private_head + ":tracked.txt") == b"retained after import failure\n"
+            helper.cleanup()
+            assert helper.root.is_dir()
+        finally:
+            if helper:
+                helper.restore()
+            shutil.rmtree(private_parent, ignore_errors=True)
+            real_git(repo, "worktree", "remove", "--force", str(work))
+            real_git(repo, "branch", "-D", branch)
+
+
 private_git_delivery_check()
+private_git_capacity_failure_check()
 FAKE = r'''#!/usr/bin/env python3
 import json, os, sys, threading, subprocess
 mode=os.environ['CASE']

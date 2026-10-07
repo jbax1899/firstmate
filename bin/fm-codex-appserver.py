@@ -509,7 +509,8 @@ class Adapter:
             if task_dir.stat().st_mode & 0o077:
                 os.chmod(task_dir, 0o700)
             self.private_root = task_dir / self.gen
-            self.private_git = PrivateGit(worktree, self.private_root, meta["branch"])
+            self.private_git = PrivateGit(worktree, self.private_root, meta["branch"],
+                                         self.task, self.gen)
             writable_roots.append(str(self.private_root))
         # bind is exclusive for this generation. A competing launch must not
         # overwrite lifecycle evidence or remove the existing owner's socket.

@@ -1,5 +1,7 @@
 """Task-private Git and trusted exact-head import for the app-server adapter."""
+import base64
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -31,13 +33,58 @@ def git_dir(gitdir, *args, data=None):
          "-c", "core.hooksPath=" + os.devnull, *args], input=data, env=_env())
 
 
+def _git_command(directory, git_dir_mode, *args):
+    if git_dir_mode:
+        return ["git", "--no-replace-objects", "--git-dir=" + str(directory),
+                "-c", "core.hooksPath=" + os.devnull, *args]
+    return ["git", "--no-replace-objects", "-c", "core.hooksPath=" + os.devnull,
+            "-C", str(directory), *args]
+
+
+def _transfer_pack(source, source_git_dir, destination, destination_git_dir, oid):
+    env = _env()
+    env["LC_ALL"] = "C"
+    producer = subprocess.Popen(_git_command(
+        source, source_git_dir, "pack-objects", "--stdout", "--revs"),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        env=env)
+    try:
+        producer.stdin.write((oid + "\n").encode())
+        producer.stdin.close()
+        consumer = subprocess.Popen(_git_command(
+            destination, destination_git_dir, "index-pack", "--stdin"),
+            stdin=producer.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            env=env)
+        producer.stdout.close()
+        _, error = consumer.communicate()
+        producer_status = producer.wait()
+    except BaseException:
+        producer.kill()
+        producer.wait()
+        raise
+    if consumer.returncode:
+        if any(message in error.lower() for message in
+               (b"no space left", b"disk quota exceeded", b"device is full")):
+            raise PrivateGitCapacityError("task-private Git pack import exceeded available storage")
+        raise subprocess.CalledProcessError(consumer.returncode, consumer.args, stderr=error)
+    if producer_status:
+        raise subprocess.CalledProcessError(producer_status, producer.args)
+
+
+class PrivateGitCapacityError(PrivateGitVerificationError):
+    """Pack import failed because the destination has no available capacity."""
+
+
 class PrivateGit:
     """A per-task Git store. Only validated reachable objects cross into canonical Git."""
 
-    def __init__(self, worktree, root, branch):
+    def __init__(self, worktree, root, branch, task, generation):
         self.published = False
         self.worktree = Path(worktree).resolve()
         self.root = Path(root).resolve()
+        self.task = task
+        self.generation = generation
+        self.owner_file = self.root.parent / (self.root.name + ".owner")
         self.pointer = self.worktree / ".git"
         if not self.pointer.is_file() or self.pointer.is_symlink():
             raise ValueError("app-server ship requires a linked worktree")
@@ -50,6 +97,9 @@ class PrivateGit:
         recorded_gitdir = Path(pointer[8:])
         if not recorded_gitdir.is_absolute():
             recorded_gitdir = self.worktree / recorded_gitdir
+        if recorded_gitdir.resolve() == self.root:
+            self._recover_stale_pointer()
+            raise ValueError("recovered stale task-private Git pointer; retry the operation")
         self.canonical = Path(git(self.worktree, "rev-parse",
                                   "--absolute-git-dir").decode().strip()).resolve()
         if recorded_gitdir.resolve() != self.canonical:
@@ -69,11 +119,11 @@ class PrivateGit:
         if git(self.worktree, "status", "--porcelain").strip():
             raise ValueError("private Git setup requires a clean task worktree")
         self.root.mkdir(mode=0o700)
+        self.preserve_root_on_failure = False
         try:
             git(self.root, "init", "--bare", "--quiet")
-            pack = git(self.worktree, "pack-objects", "--stdout", "--revs",
-                       data=(self.base + "\n").encode())
-            git(self.root, "index-pack", "--stdin", data=pack)
+            self.preserve_root_on_failure = True
+            _transfer_pack(self.worktree, False, self.root, False, self.base)
             git(self.root, "update-ref", self.ref, self.base)
             git(self.root, "symbolic-ref", "HEAD", self.ref)
             git(self.root, "config", "core.bare", "false")
@@ -87,14 +137,63 @@ class PrivateGit:
                     git(self.root, "config", key, value.stdout.decode().strip())
             config = self.root / "config"
             self.config_hash = hashlib.sha256(config.read_bytes()).digest()
+            self._write_owner_record()
             self.pointer_active = False
             self._write_pointer(("gitdir: " + str(self.root) + "\n").encode())
             self.pointer_active = True
             git(self.worktree, "read-tree", self.base)
         except BaseException:
             self.restore()
-            shutil.rmtree(self.root, ignore_errors=True)
+            if not self.preserve_root_on_failure:
+                shutil.rmtree(self.root, ignore_errors=True)
             raise
+
+    def _owner_record(self):
+        return {"task": self.task, "generation": self.generation,
+                "worktree": str(self.worktree), "canonical": str(self.canonical),
+                "original": base64.b64encode(self.original).decode("ascii")}
+
+    def _write_owner_record(self):
+        payload = (json.dumps(self._owner_record(), sort_keys=True) + "\n").encode()
+        fd = os.open(self.owner_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(fd, view)
+                view = view[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _recover_stale_pointer(self):
+        if (self.root.is_symlink() or not self.root.is_dir() or
+                self.owner_file.is_symlink() or not self.owner_file.is_file() or
+                self.owner_file.stat().st_nlink != 1):
+            raise ValueError("stale private Git pointer has no safe owner record")
+        record = json.loads(self.owner_file.read_text())
+        if (record.get("task") != self.task or record.get("generation") != self.generation or
+                record.get("worktree") != str(self.worktree)):
+            raise ValueError("stale private Git pointer belongs to another task or generation")
+        canonical = Path(record.get("canonical", "/"))
+        original = base64.b64decode(record["original"], validate=True)
+        try:
+            original_pointer = original.decode("utf-8").strip()
+            original_gitdir = Path(original_pointer[8:])
+            if not original_pointer.startswith("gitdir: "):
+                raise ValueError
+            if not original_gitdir.is_absolute():
+                original_gitdir = self.worktree / original_gitdir
+        except (UnicodeDecodeError, ValueError):
+            raise ValueError("stale private Git pointer owner record is invalid") from None
+        if original_gitdir.resolve() != canonical.resolve():
+            raise ValueError("stale private Git pointer owner record is invalid")
+        relation = canonical / "gitdir"
+        if (relation.is_symlink() or not relation.is_file() or
+                Path(relation.read_text().strip()).resolve() != self.pointer.resolve()):
+            raise ValueError("stale private Git pointer repository ownership is unverified")
+        if self.pointer.read_bytes() != ("gitdir: " + str(self.root) + "\n").encode():
+            raise ValueError("stale private Git pointer changed during recovery")
+        self._write_pointer(original)
 
     def _write_pointer(self, value):
         temporary = self.worktree / (".git-pointer-" + str(os.getpid()))
@@ -119,6 +218,7 @@ class PrivateGit:
         self.restore()
         if self.published:
             shutil.rmtree(self.root)
+            self.owner_file.unlink(missing_ok=True)
             try:
                 self.root.parent.rmdir()
             except OSError:
@@ -215,11 +315,9 @@ class PrivateGit:
                     git(snapshot, *args)
                 except subprocess.CalledProcessError as exc:
                     raise PrivateGitVerificationError(reason) from exc
-            pack = git(snapshot, "pack-objects", "--stdout", "--revs",
-                       data=(oid + "\n").encode())
             # This process is outside the worker sandbox. CAS refuses a branch
             # moved by another supervisor since task setup.
-            git_dir(self.canonical, "index-pack", "--stdin", data=pack)
+            _transfer_pack(snapshot, False, self.canonical, True, oid)
             git_dir(self.canonical, "update-ref", self.ref, oid, self.old)
             self.restore()
             git(self.worktree, "symbolic-ref", "HEAD", self.ref)
