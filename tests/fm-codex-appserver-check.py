@@ -256,7 +256,10 @@ for line in sys.stdin:
   if mode in ('wrong-thread','wrong-turn','sibling','unknown','bad-report','large-report','bad-shape','unknown-tool'):
    assert m['result']['success'] is False
    terminal('completed')
-  elif mode in ('scout-missing','scout-path','scout-large','scout-stale','scout-preexisting'):
+  elif mode in ('scout-failed','scout-interrupted'):
+   assert m['result']['success'] is True
+   terminal('failed' if mode=='scout-failed' else 'interrupted')
+  elif mode in ('scout-missing','scout-path','scout-large','scout-stale'):
    assert m['result']['success'] is False
    if mode=='scout-stale':
     open(os.path.join(os.environ['CASE_STATE'],'t.busy-gen'),'w').write(os.environ['CASE_GEN']+'\n')
@@ -305,7 +308,7 @@ with tempfile.TemporaryDirectory(prefix='fm-as-') as tmp:
     (fakebin / 'tmux').write_text('#!/bin/sh\nexit 0\n')
     (fakebin / 'tmux').chmod(0o755)
     env = dict(os.environ, PATH=str(fakebin)+':'+os.environ['PATH'])
-    for case in ['scout-stale','scout-success','scout-missing','scout-path','scout-large','scout-duplicate','scout-preexisting','working','success','failed','interrupted','result-active','success-no-result',
+    for case in ['scout-stale','scout-success','scout-failed','scout-interrupted','scout-missing','scout-path','scout-large','scout-duplicate','scout-preexisting','working','success','failed','interrupted','result-active','success-no-result',
                  'wrong-thread','wrong-turn','sibling','unknown','bad-report','malformed','death','verification-refusal','verification-stale','publication-internal-error',
                  'decision','decision-held','decision-held-legacy','decision-large','decision-death','decision-cancel','decision-backend-death','interrupt-error','interrupt-timeout','stale',
                  'duplicate-request','bad-json','bad-params','bad-turn','bad-response','oversized','large-report','bad-shape','unknown-tool']:

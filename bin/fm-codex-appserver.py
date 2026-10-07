@@ -73,6 +73,7 @@ class Adapter:
         self.thread = self.turn = None
         self.active = False
         self.result = None
+        self.scout_report = None
         self.pending = None
         self.calls = set()
         self.requests = set()
@@ -212,7 +213,7 @@ class Adapter:
                     if meta.get("kind") == "scout":
                         if report is None:
                             raise ValueError("scout result requires report content")
-                        self.publish_scout_report(report)
+                        self.scout_report = report
                     elif report is not None:
                         raise ValueError("report content is only accepted for scouts")
                     self.result = text
@@ -275,6 +276,17 @@ class Adapter:
             self.retire_pending()
             self.terminal = status
             if status == "completed" and self.result is not None:
+                if self.scout_report is not None:
+                    try:
+                        with self.bound():
+                            self.publish_scout_report(self.scout_report)
+                    except (OSError, ValueError):
+                        self.result = None
+                        self.scout_report = None
+                        self.terminal = "failed"
+                        self.report("failed: supervisor refused scout report publication")
+                        self.busy("idle", "turn-failed")
+                        return
                 if self.private_git is not None:
                     try:
                         oid = self.private_git.publish(self.private_root.parent)
@@ -290,6 +302,7 @@ class Adapter:
                 self.report("done: " + self.result)
             elif status != "completed":
                 self.result = None
+                self.scout_report = None
                 self.report("failed: app-server turn " + status)
             event = "turn-completed-result" if status == "completed" and self.result is not None else "turn-" + status
             self.busy("idle", event)
