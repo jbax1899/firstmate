@@ -189,6 +189,13 @@ Backend capability comes from each adapter's real surface, not from a policy cho
 Per-harness interrupt keys, repeat counts, composer clears, exit commands, and supported task kinds live in `bin/fm-control-lib.sh` and are exercised for every verified harness by `tests/fm-control.test.sh`, with adapters outside its lane pinning their control mechanics in their own harness suites.
 The empirical basis for each adapter's value is the `harness-adapters` skill's verification record for that adapter.
 
+## JSON task-control interface
+
+`bin/fm-api.sh` exposes `create`, `status`, `list`, `steer`, and `cancel` over JSON while leaving task and lifecycle state with Firstmate's existing owners.
+`status` and `list` include the canonical `open_decisions` entries (`key`, `verb`, and `summary`) so a client can surface the question and pass its key with `steer <task-id>` to resume that same task.
+`create` launches the supervised Codex app-server worker with fixed Codex and low-effort settings on a supported Linux host; callers cannot choose a harness, model, or effort.
+`cancel` verifies agent exit and preserves the task and work; it does not record a durable cancelled task state.
+
 ## Verification
 
 - `tests/fm-control.test.sh` - the adapter contract for its verified-harness lane (adapters outside the lane pin their control mechanics in their own harness suites), the backend capability matrix, exact-id scoping, the closed verb list, the busy, idle, dead, and idempotent lifecycle cases, and marker non-regression, all against a stubbed session provider.

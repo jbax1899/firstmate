@@ -33,6 +33,17 @@ def fm(script, *args, **kwargs):
     return run('bash',str(root/'bin'/script),*args,**kwargs)
 
 
+def api(command, *args, request=None, timeout=60):
+    result=subprocess.run(
+        ['bash',str(root/'bin/fm-api.sh'),command,*args],
+        cwd=root,env=env,text=True,capture_output=True,timeout=timeout,
+        input=None if request is None else json.dumps(request,separators=(',',':')),
+    )
+    if result.returncode:
+        raise RuntimeError('fm-api '+command+': '+result.stdout+result.stderr)
+    return json.loads(result.stdout)
+
+
 def wait(predicate, description, seconds=150):
     deadline = time.monotonic()+seconds
     while time.monotonic()<deadline:
@@ -271,6 +282,71 @@ PYSEC""".replace('PROBES',repr({name:str(path) for name,path in probes.items()})
         assert '"status": "interrupted"' in capture('cancel')
         assert not list((lab/'state').glob('*.sock'))
         print('ok - live scout interruption suppresses its submitted report and reaps app-server',flush=True)
+    if plan.selected('api-roundtrip', scenarios):
+        assert api('list')['tasks']==[]
+        request={
+            'project':'canary',
+            'title':'JSON API supervised canary',
+            'instruction':(
+                'Create canary.txt with exactly FIRSTMATE_FILE_OK followed by one newline, then call '
+                'firstmate_report progress with CANARY_FILE_CREATED. Call firstmate_report needs-decision '
+                'with the question "Operator check: reply GREEN" and wait for the answer. After it resumes, '
+                'call firstmate_report progress with CANARY_RESUMED_SAME_TASK, write answer.txt with exactly '
+                'the answer followed by one newline, stage both files, and create one local commit. Then call '
+                'firstmate_report result with the message FIRSTMATE_CANARY_COMPLETED GREEN. Do not push, '
+                'merge, create a PR, or access FirstMate state.'
+            ),
+            'authority':{'inspect':True,'edit':True,'commit':True,'push':False,'deploy':False},
+        }
+        created=api('create',request=request,timeout=180)
+        task=created['task_id']
+        assert created['state']=='working'
+        print('ok - live JSON create task_id='+task,flush=True)
+        wait(lambda: api('status',task).get('state')=='working', 'JSON working state')
+        initial=api('status',task)
+        assert initial['task_id']==task and initial['state']=='working'
+        listed=api('list')['tasks']
+        assert [row['task_id'] for row in listed]==[task]
+        wait(lambda: api('status',task).get('state')=='needs-user'
+             and api('status',task).get('open_decisions'), 'JSON needs-user question surfaced')
+        waiting=api('status',task)
+        decision=waiting['open_decisions'][0]
+        assert waiting['task_id']==task and waiting['needs_user']
+        assert decision['verb']=='needs-decision' and 'reply GREEN' in decision['summary']
+        print('ok - live JSON needs-user task_id='+task+' key='+decision['key']+
+              ' question='+decision['summary'],flush=True)
+        steered=api('steer',task,request={'message':'GREEN','resolve_keys':[decision['key']]})
+        assert steered['accepted'] and steered['task_id']==task
+        print('ok - live JSON steer task_id='+steered['task_id']+
+              ' resolve_key='+decision['key'],flush=True)
+        wait(lambda: api('status',task).get('state')=='working', 'JSON same-task resumption')
+        resumed=api('status',task)
+        assert resumed['task_id']==task and resumed['state']=='working'
+        assert [row['task_id'] for row in api('list')['tasks']]==[task]
+        print('ok - live JSON resumed task_id='+task,flush=True)
+        wait(lambda: api('status',task).get('state')=='complete', 'JSON completion returned')
+        complete=api('status',task)
+        assert complete['task_id']==task and 'FIRSTMATE_CANARY_COMPLETED GREEN' in (complete['summary'] or '')
+        task_meta=metadata(task)
+        branch=task_meta['branch']
+        assert branch
+        file_readback=run('git','show',branch+':canary.txt',cwd=project)
+        answer_readback=run('git','show',branch+':answer.txt',cwd=project)
+        assert file_readback=='FIRSTMATE_FILE_OK'
+        assert answer_readback=='GREEN'
+        cancelled=api('cancel',task)
+        assert cancelled['task_id']==task and cancelled['agent_stopped'] and cancelled['task_state_retained']
+        after_cancel=api('status',task)
+        assert after_cancel['task_id']==task and after_cancel['state']=='complete'
+        assert run('git','show',branch+':canary.txt',cwd=project)=='FIRSTMATE_FILE_OK'
+        evidence={'task_id':task,'decision_key':decision['key'],'question':decision['summary'],
+                  'steer_task_id':steered['task_id'],'resumed_state':resumed['state'],
+                  'completed_state':complete['state'],'completion':complete['summary'],
+                  'branch':branch,'canary_file':file_readback,'answer_file':answer_readback,
+                  'cancel_state_retained':after_cancel['state']}
+        (lab/'api-roundtrip-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
+        print('ok - live JSON completion and exact readback '+json.dumps(evidence,separators=(',',':')),flush=True)
+        (lab/'api-roundtrip-trace.txt').write_text(capture(task))
     print('CANARY_PASS evidence='+str(lab),flush=True)
 finally:
     network.close()
