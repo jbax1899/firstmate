@@ -2530,6 +2530,8 @@ The focused canary exercises create, working, needs-user, keyed steer, same-task
 FM_CODEX_APPSERVER_LIVE=1 bash tests/fm-codex-appserver-live-e2e.test.sh --scenario api-roundtrip
 ```
 
+Set `FM_API_ROUNDTRIP_INTERACTIVE=1` before this command to wait for the operator's reply before steering the same task.
+
 Observed output:
 
 ```text

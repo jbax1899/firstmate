@@ -18,6 +18,7 @@ plan = module_from_spec(plan_spec)
 plan_spec.loader.exec_module(plan)
 scenarios = plan.parse_scenarios(sys.argv[2:])
 lab = Path(tempfile.mkdtemp(prefix='fm-as-canary-'))
+interactive_api = os.environ.get('FM_API_ROUNDTRIP_INTERACTIVE') == '1'
 env = {k: v for k, v in os.environ.items() if not k.startswith('FM_') and k not in ('TMUX','TMUX_PANE','TASKS_AXI_FILE','TASKS_AXI_BACKEND')}
 env['FM_HOME'] = str(lab)
 
@@ -315,7 +316,11 @@ PYSEC""".replace('PROBES',repr({name:str(path) for name,path in probes.items()})
         assert decision['verb']=='needs-decision' and 'reply GREEN' in decision['summary']
         print('ok - live JSON needs-user task_id='+task+' key='+decision['key']+
               ' question='+decision['summary'],flush=True)
-        steered=api('steer',task,request={'message':'GREEN','resolve_keys':[decision['key']]})
+        answer='GREEN'
+        if interactive_api:
+            answer=input('Operator reply for '+task+': ').strip()
+            assert answer=='GREEN'
+        steered=api('steer',task,request={'message':answer,'resolve_keys':[decision['key']]})
         assert steered['accepted'] and steered['task_id']==task
         print('ok - live JSON steer task_id='+steered['task_id']+
               ' resolve_key='+decision['key'],flush=True)
