@@ -191,10 +191,10 @@ The empirical basis for each adapter's value is the `harness-adapters` skill's v
 
 ## JSON task-control interface
 
-`bin/fm-api.sh` exposes `create`, `status`, `list`, `steer`, and `cancel` over JSON while leaving task and lifecycle state with Firstmate's existing owners.
-`status` and `list` include the canonical `open_decisions` entries (`key`, `verb`, and `summary`) so a client can surface the question and pass its key with `steer <task-id>` to resume that same task.
-`create` launches the supervised Codex app-server worker with fixed Codex and low-effort settings on a supported Linux host; callers cannot choose a harness, model, or effort.
-`cancel` verifies agent exit and preserves the task and work; it does not record a durable cancelled task state.
+`bin/fm-api.sh` exposes `create`, `status`, `list`, `steer`, and `cancel` while Firstmate retains task and lifecycle state. A trusted caller supplies `FM_API_OWNER_ID` and a comma-separated `FM_API_PROJECT_ALLOWLIST`; create also requires a registered project with `local-only` posture.
+Create accepts only `request_id`, `project`, `title`, and `instruction`. It fixes the worker to Codex app-server at low effort, with push and deploy disabled. An owner, request id, and payload digest marker are stored in the existing backlog task body; the create lock plus that marker makes a repeated request id return the original task without starting another worker. After an uncertain create, reuse the same request id and inspect the returned task; do not mint a replacement id.
+`status` and `list` expose only tasks carrying the caller's owner marker in an allowlisted project. They include the canonical `open_decisions` (`key`, `verb`, and `summary`). A keyed answer is accepted only while its key remains open; a steer without `resolve_keys` remains an ordinary message and does not close a decision.
+`cancel` verifies agent exit and preserves the task and work; it does not record a durable cancelled task state. API requests and results are size-limited, and helper failures remain structured and fail-closed.
 
 ## Verification
 

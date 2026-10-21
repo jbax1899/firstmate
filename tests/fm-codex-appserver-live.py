@@ -21,6 +21,8 @@ lab = Path(tempfile.mkdtemp(prefix='fm-as-canary-'))
 interactive_api = os.environ.get('FM_API_ROUNDTRIP_INTERACTIVE') == '1'
 env = {k: v for k, v in os.environ.items() if not k.startswith('FM_') and k not in ('TMUX','TMUX_PANE','TASKS_AXI_FILE','TASKS_AXI_BACKEND')}
 env['FM_HOME'] = str(lab)
+env['FM_API_OWNER_ID'] = 'api-roundtrip'
+env['FM_API_PROJECT_ALLOWLIST'] = 'canary'
 
 
 def run(*args, check=True, timeout=60, cwd=root):
@@ -286,6 +288,7 @@ PYSEC""".replace('PROBES',repr({name:str(path) for name,path in probes.items()})
     if plan.selected('api-roundtrip', scenarios):
         assert api('list')['tasks']==[]
         request={
+            'request_id':'api-roundtrip-'+str(os.getpid()),
             'project':'canary',
             'title':'JSON API supervised canary',
             'instruction':(
@@ -297,7 +300,6 @@ PYSEC""".replace('PROBES',repr({name:str(path) for name,path in probes.items()})
                 'firstmate_report result with the message FIRSTMATE_CANARY_COMPLETED GREEN. Do not push, '
                 'merge, create a PR, or access FirstMate state.'
             ),
-            'authority':{'inspect':True,'edit':True,'commit':True,'push':False,'deploy':False},
         }
         created=api('create',request=request,timeout=180)
         task=created['task_id']

@@ -9,167 +9,233 @@ TMP_ROOT=$(fm_test_tmproot fm-api)
 HOME_DIR="$TMP_ROOT/home"
 BIN="$TMP_ROOT/bin"
 API="$BIN/fm-api.sh"
+SNAPSHOT="$TMP_ROOT/snapshot.json"
 mkdir -p "$HOME_DIR/projects/demo" "$HOME_DIR/data" "$BIN"
 cp "$ROOT/bin/fm-api.sh" "$API"
 printf '%s\n' '- demo [local-only] - disposable fixture' > "$HOME_DIR/data/projects.md"
 
-cat > "$BIN/fm-fleet-snapshot.sh" <<'EOF'
+cat > "$BIN/fm-fleet-snapshot.sh" <<'STUB'
 #!/usr/bin/env bash
 if [ "${FM_API_TEST_SNAPSHOT_FAIL:-0}" = 1 ]; then
   printf '%s\n' 'partial snapshot'
   exit 1
 fi
 cat "$FM_API_TEST_SNAPSHOT"
-EOF
-cat > "$BIN/fm-project-mode.sh" <<'EOF'
+STUB
+cat > "$BIN/fm-project-mode.sh" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
   --raw) printf '%s\n' "${FM_API_TEST_POSTURE:-local-only} off" ;;
-  --branch-prefix) printf '%s\n' "${FM_API_TEST_BRANCH_PREFIX:-fm/}" ;;
-  --forge) printf '%s\n' "${FM_API_TEST_FORGE:-none}" ;;
+  --branch-prefix) printf '%s\n' "fm/" ;;
+  --forge) printf '%s\n' none ;;
 esac
-EOF
-cat > "$BIN/fm-tasks-axi.sh" <<'EOF'
+STUB
+cat > "$BIN/fm-tasks-axi.sh" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' add >> "$FM_API_TEST_ADD_CALLS"
-printf '{"ok":true,"task":{"id":"%s"}}\n' "${FM_API_TEST_TASK_ID:-api-canary-1}"
-EOF
-cat > "$BIN/fm-brief.sh" <<'EOF'
+set -eu
+[ "${1:-}" = add ]
+id=${FM_API_TEST_TASK_ID:-created001}
+title=${2:-}
+repo=
+body=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repo) repo=$2; shift 2 ;;
+    --body) body=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s\n' "$id" >> "$FM_API_TEST_ADD_CALLS"
+printf '%s' "$body" > "$FM_API_TEST_LAST_BODY"
+jq --arg id "$id" --arg repo "$repo" --arg title "$title" --arg body "$body" \
+  '.backlog.records += [{id:$id,structured:true,state:"queued",repo:$repo,title:$title,body_lines:($body|split("\n"))}]' \
+  "$FM_API_TEST_SNAPSHOT" > "$FM_API_TEST_SNAPSHOT.tmp"
+mv "$FM_API_TEST_SNAPSHOT.tmp" "$FM_API_TEST_SNAPSHOT"
+jq -cn --arg id "$id" '{ok:true,task:{id:$id}}'
+STUB
+cat > "$BIN/fm-brief.sh" <<'STUB'
 #!/usr/bin/env bash
-mkdir -p "$FM_HOME/data/$1"
+set -eu
 printf '%s\n' "$*" > "$FM_API_TEST_BRIEF_ARGS"
+mkdir -p "$FM_HOME/data/$1"
 printf '%s\n' '{TASK}' '{FIRSTMATE_SPEC}' > "$FM_HOME/data/$1/brief.md"
-EOF
-cat > "$BIN/fm-spawn.sh" <<'EOF'
+[ "${FM_API_TEST_BRIEF_FAIL:-0}" != 1 ]
+STUB
+cat > "$BIN/fm-spawn.sh" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" > "$FM_API_TEST_SPAWN_ARGS"
-EOF
-cat > "$BIN/fm-send.sh" <<'EOF'
-#!/usr/bin/env bash
-[ "${FM_HOME:-}" = "$FM_API_TEST_EXPECT_HOME" ] || exit 1
-printf '%s\n' "$*" > "$FM_API_TEST_SEND_ARGS"
-EOF
-cat > "$BIN/fm-control.sh" <<'EOF'
+printf '%s\n' "$*" >> "$FM_API_TEST_SPAWN_ARGS"
+[ "${FM_API_TEST_SPAWN_FAIL:-0}" != 1 ]
+STUB
+cat > "$BIN/fm-send.sh" <<'STUB'
 #!/usr/bin/env bash
 [ "${FM_HOME:-}" = "$FM_API_TEST_EXPECT_HOME" ] || exit 1
+printf '%s\n' "$*" >> "$FM_API_TEST_SEND_ARGS"
+[ "${FM_API_TEST_SEND_FAIL:-0}" != 1 ]
+STUB
+cat > "$BIN/fm-control.sh" <<'STUB'
+#!/usr/bin/env bash
+[ "${FM_HOME:-}" = "$FM_API_TEST_EXPECT_HOME" ] || exit 1
+printf '%s\n' "$*" >> "$FM_API_TEST_CONTROL_ARGS"
 [ "${FM_API_TEST_CONTROL_FAIL:-0}" != 1 ]
-EOF
+STUB
 for helper in "$BIN"/*.sh; do
   [ "$helper" = "$API" ] || chmod +x "$helper"
 done
+
+export FM_HOME="$HOME_DIR"
+export FM_API_OWNER_ID=owner_a
+export FM_API_PROJECT_ALLOWLIST=demo
 export FM_API_TEST_EXPECT_HOME="$HOME_DIR"
-ADD_CALLS="$TMP_ROOT/tasks.add"
-: > "$ADD_CALLS"
-export FM_API_TEST_ADD_CALLS="$ADD_CALLS"
+export FM_API_TEST_ADD_CALLS="$TMP_ROOT/tasks.add"
+export FM_API_TEST_LAST_BODY="$TMP_ROOT/task.body"
+export FM_API_TEST_SNAPSHOT="$SNAPSHOT"
+export FM_API_TEST_BRIEF_ARGS="$TMP_ROOT/brief.args"
+export FM_API_TEST_SPAWN_ARGS="$TMP_ROOT/spawn.args"
+export FM_API_TEST_SEND_ARGS="$TMP_ROOT/send.args"
+export FM_API_TEST_CONTROL_ARGS="$TMP_ROOT/control.args"
+: > "$FM_API_TEST_ADD_CALLS"
+: > "$FM_API_TEST_SPAWN_ARGS"
+: > "$FM_API_TEST_SEND_ARGS"
+: > "$FM_API_TEST_CONTROL_ARGS"
 
-SNAPSHOT="$TMP_ROOT/snapshot.json"
-cat > "$SNAPSHOT" <<'EOF'
-{"tasks":[
-  {"id":"api-canary-1","project":"demo","kind":"ship","current_state":{"state":"parked","detail":"choose A or B"},"hints":{"pending_decision":true,"open_decisions":[{"key":"choice","verb":"needs-decision","summary":"Choose A or B"}]},"endpoint":{"status":"alive"}},
-  {"id":"api-canary-2","project":"demo","kind":"ship","current_state":{"state":"done","detail":"finished"},"hints":{"pending_decision":false,"open_decisions":[]},"endpoint":{"status":"absent"}}
+cat > "$SNAPSHOT" <<'DATA'
+{"backlog":{"records":[
+  {"id":"owned001","structured":true,"state":"in_flight","repo":"demo","title":"owned task","body_lines":["<!-- fm-api:v1 owner=owner_a request=seed00001 digest=seed -->"]},
+  {"id":"foreign001","structured":true,"state":"in_flight","repo":"demo","title":"other session","body_lines":["<!-- fm-api:v1 owner=owner_b request=seed00002 digest=seed -->"]},
+  {"id":"mismatch01","structured":true,"state":"in_flight","repo":"demo","title":"mismatched project","body_lines":["<!-- fm-api:v1 owner=owner_a request=seed00004 digest=seed -->"]},
+  {"id":"doneowned","structured":true,"state":"done","repo":"demo","title":"completed","body_lines":["<!-- fm-api:v1 owner=owner_a request=seed00003 digest=seed -->"]}
+]},"tasks":[
+  {"id":"owned001","project":"demo","kind":"ship","current_state":{"state":"parked","detail":"choose A or B"},"hints":{"pending_decision":true,"open_decisions":[{"key":"choice","verb":"needs-decision","summary":"Choose A or B"}]},"endpoint":{"status":"alive"}},
+  {"id":"foreign001","project":"demo","kind":"ship","current_state":{"state":"working","detail":"private work"},"hints":{"pending_decision":false,"open_decisions":[]},"endpoint":{"status":"alive"}},
+  {"id":"mismatch01","project":"unregistered","kind":"ship","current_state":{"state":"working","detail":"wrong project"},"hints":{"pending_decision":false,"open_decisions":[]},"endpoint":{"status":"alive"}},
+  {"id":"doneowned","project":"demo","kind":"ship","current_state":{"state":"done","detail":"finished"},"hints":{"pending_decision":false,"open_decisions":[]},"endpoint":{"status":"absent"}}
 ]}
-EOF
-mkdir -p "$HOME_DIR/data/api-canary-1"
-printf '%s\n' 'canary result' > "$HOME_DIR/data/api-canary-1/report.md"
+DATA
+mkdir -p "$HOME_DIR/data/owned001"
+printf '%s\n' 'canary result' > "$HOME_DIR/data/owned001/report.md"
 
-CREATE="{\"project\":\"demo\",\"title\":\"safe canary\",\"instruction\":\"Inspect only; preserve \$HOME, quotes: \\\"yes\\\", and {FIRSTMATE_SPEC}.\",\"authority\":{\"inspect\":true,\"edit\":true,\"commit\":true,\"push\":false,\"deploy\":false}}"
-created=$(printf '%s' "$CREATE" | FM_HOME="$HOME_DIR" FM_API_TEST_BRIEF_ARGS="$TMP_ROOT/brief.args" FM_API_TEST_SPAWN_ARGS="$TMP_ROOT/spawn.args" \
-  "$API" create)
-printf '%s\n' "$created" | jq -e '.state == "working" and .task_id == "api-canary-1"' >/dev/null \
-  || fail 'create returns JSON with the Firstmate task id'
-grep -F "Inspect only; preserve \$HOME, quotes: \"yes\", and {FIRSTMATE_SPEC}." "$HOME_DIR/data/api-canary-1/brief.md" >/dev/null \
-  || fail 'create safely fills the generated brief'
-grep -F 'Authority: inspect=true' "$HOME_DIR/data/api-canary-1/brief.md" >/dev/null \
-  || fail 'task text cannot consume the spec placeholder'
-grep -F -- '--branch-prefix fm/ --forge none' "$TMP_ROOT/brief.args" >/dev/null \
-  || fail 'create passes registered branch and forge details to the brief'
-grep -F -- '--mode local-only --yolo off' "$TMP_ROOT/spawn.args" >/dev/null \
-  || fail 'commit/no-push authority maps to local-only with yolo off'
-grep -F -- '--branch-prefix fm/' "$TMP_ROOT/spawn.args" >/dev/null \
-  || fail 'create passes registered branch details to spawn'
-grep -F -- '--harness codex --effort low --codex-appserver' "$TMP_ROOT/spawn.args" >/dev/null \
-  || fail 'create uses the fixed supervised Codex app-server transport'
-pass 'create safely delegates intake, registered posture, brief, and launch'
-
-FORGE_CREATE=$(printf '%s' "$CREATE" | jq -c '.title = "registered forge" | .authority.push = true | .mode = "no-mistakes"')
-printf '%s' "$FORGE_CREATE" | FM_HOME="$HOME_DIR" FM_API_TEST_POSTURE=no-mistakes \
-  FM_API_TEST_BRANCH_PREFIX=custom/ FM_API_TEST_FORGE=gerrit FM_API_TEST_TASK_ID=api-canary-2 \
-  FM_API_TEST_BRIEF_ARGS="$TMP_ROOT/brief.args" FM_API_TEST_SPAWN_ARGS="$TMP_ROOT/spawn.args" \
-  "$API" create >/dev/null || fail 'registered forge task should create'
-grep -F -- '--mode no-mistakes --branch-prefix custom/ --forge gerrit' "$TMP_ROOT/brief.args" >/dev/null \
-  || fail 'create preserves registered branch and forge details in the brief'
-grep -F -- '--mode no-mistakes --yolo off --branch-prefix custom/' "$TMP_ROOT/spawn.args" >/dev/null \
-  || fail 'create preserves registered branch details in spawn'
-pass 'create preserves project branch and forge registration'
-
+CREATE=$(jq -cn '{request_id:"create-0001",project:"demo",title:"safe canary",instruction:"Inspect only; preserve quotes and {FIRSTMATE_SPEC}."}')
+created=$(printf '%s' "$CREATE" | FM_API_TEST_TASK_ID=created001 "$API" create)
 task_id=$(printf '%s\n' "$created" | jq -r .task_id)
-status=$(FM_HOME="$HOME_DIR" FM_API_TEST_SNAPSHOT="$SNAPSHOT" "$API" status "$task_id")
-printf '%s\n' "$status" | jq -e '.task_id == "api-canary-1" and .state == "needs-user" and .needs_user and .open_decisions[0].key == "choice" and .open_decisions[0].summary == "Choose A or B" and .result == "canary result\n"' >/dev/null \
-  || fail 'status exposes the decision key and bounded result under the created task id'
-pass 'status projects Firstmate state and result'
+[ "$task_id" = created001 ] || fail 'create returns the Firstmate task id'
+printf '%s\n' "$created" | jq -e '.created and .state == "working"' >/dev/null \
+  || fail 'create reports a new local-only task'
+grep -F -- '--mode local-only --yolo off' "$FM_API_TEST_SPAWN_ARGS" >/dev/null \
+  || fail 'create fixes execution to local-only with yolo off'
+grep -F 'push=false, deploy=false' "$HOME_DIR/data/created001/brief.md" >/dev/null \
+  || fail 'the generated brief fixes push and deployment off'
+grep -F 'fm-api:v1 owner=owner_a request=create-0001 digest=' "$FM_API_TEST_LAST_BODY" >/dev/null \
+  || fail 'ownership and idempotency are recorded in the canonical task body'
+pass 'create fixes authority and records owner/request metadata in Firstmate backlog'
 
-listed=$(FM_HOME="$HOME_DIR" FM_API_TEST_SNAPSHOT="$SNAPSHOT" "$API" list)
-printf '%s\n' "$listed" | jq -e '.tasks | length == 1 and .[0].task_id == "api-canary-1" and .[0].state == "needs-user" and .[0].open_decisions[0].key == "choice"' >/dev/null \
-  || fail 'list returns only nonterminal bounded task projections'
-pass 'list returns machine-readable active work'
+add_count=$(wc -l < "$FM_API_TEST_ADD_CALLS" | tr -d '[:space:]')
+spawn_count=$(wc -l < "$FM_API_TEST_SPAWN_ARGS" | tr -d '[:space:]')
+duplicate=$(printf '%s' "$CREATE" | FM_API_TEST_TASK_ID=other001 "$API" create)
+[ "$(printf '%s\n' "$duplicate" | jq -r .task_id)" = "$task_id" ] \
+  || fail 'duplicate create returns the original task id'
+printf '%s\n' "$duplicate" | jq -e '.reused and (.created == false) and .outcome == "not_retried"' >/dev/null \
+  || fail 'duplicate create is observable and does not claim a retry'
+[ "$(wc -l < "$FM_API_TEST_ADD_CALLS" | tr -d '[:space:]')" = "$add_count" ] \
+  || fail 'duplicate create does not add a second Firstmate task'
+[ "$(wc -l < "$FM_API_TEST_SPAWN_ARGS" | tr -d '[:space:]')" = "$spawn_count" ] \
+  || fail 'duplicate create does not spawn a second worker'
+pass 'same request id is idempotent and never launches twice'
 
-decision_key=$(printf '%s\n' "$status" | jq -r '.open_decisions[0].key')
-steer_request=$(jq -cn --arg key "$decision_key" '{message:"Use option B.",resolve_keys:[$key]}')
-add_count_before=$(wc -l < "$ADD_CALLS" | tr -d '[:space:]')
-steered=$(printf '%s' "$steer_request" \
-  | FM_HOME="$HOME_DIR" FM_API_TEST_SEND_ARGS="$TMP_ROOT/send.args" "$API" steer "$task_id")
-printf '%s\n' "$steered" | jq -e --arg task_id "$task_id" '.accepted and .task_id == $task_id' >/dev/null \
-  || fail 'steer returns structured delivery acceptance'
-grep -F -- "$task_id --resolve-key $decision_key" "$TMP_ROOT/send.args" >/dev/null \
-  || fail 'steer resolves the surfaced decision on the original task id'
-[ "$(wc -l < "$ADD_CALLS" | tr -d '[:space:]')" = "$add_count_before" ] \
-  || fail 'steer must not create a second task'
-pass 'steer delegates to the existing message plane'
+changed=$(printf '%s' "$CREATE" | jq -c '.title = "different payload"')
+if rejected=$(printf '%s' "$changed" | "$API" create 2>/dev/null); then fail 'changed payload must conflict with an existing request id'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "idempotency_conflict" and .task_id == "created001"' >/dev/null \
+  || fail 'idempotency conflict identifies the same owner task'
+pass 'request id cannot be reused with a different payload'
 
-cancelled=$(FM_HOME="$HOME_DIR" "$API" cancel "$task_id")
+status=$("$API" status owned001)
+printf '%s\n' "$status" | jq -e '.task_id == "owned001" and .state == "needs-user" and .needs_user and .open_decisions[0].key == "choice" and .result == "canary result\n"' >/dev/null \
+  || fail 'status exposes only the owned task decision and bounded result'
+listed=$("$API" list)
+printf '%s\n' "$listed" | jq -e '.tasks | length == 1 and .[0].task_id == "owned001"' >/dev/null \
+  || fail 'list filters foreign and terminal tasks'
+pass 'status and list are scoped to the configured caller owner'
+
+if rejected=$("$API" status foreign001 2>/dev/null); then fail 'status must hide a task owned by another session'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "not_found" and .task_id == null' >/dev/null \
+  || fail 'foreign task status is an opaque not-found result'
+if rejected=$("$API" status mismatch01 2>/dev/null); then fail 'status must refuse a task whose snapshot project disagrees with its owned backlog record'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "not_found"' >/dev/null \
+  || fail 'project mismatch fails closed'
+if rejected=$("$API" steer foreign001 <<'DATA' 2>/dev/null
+{"message":"do not deliver"}
+DATA
+); then fail 'steer must refuse a foreign task'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "not_found"' >/dev/null \
+  || fail 'foreign task steer fails before side effects'
+if rejected=$("$API" cancel foreign001 2>/dev/null); then fail 'cancel must refuse a foreign task'; fi
+[ ! -s "$FM_API_TEST_CONTROL_ARGS" ] || fail 'foreign task cancel did not reach fm-control'
+pass 'wrong task ids cannot be read, steered, or cancelled'
+
+decision=$(jq -cn '{message:"Use option B.",resolve_keys:["choice"]}')
+steered=$(printf '%s' "$decision" | "$API" steer owned001)
+printf '%s\n' "$steered" | jq -e '.accepted and .task_id == "owned001"' >/dev/null \
+  || fail 'valid decision steer is accepted for the original id'
+grep -F -- 'owned001 --resolve-key choice' "$FM_API_TEST_SEND_ARGS" >/dev/null \
+  || fail 'valid key is passed to Firstmate on the same task'
+send_count=$(wc -l < "$FM_API_TEST_SEND_ARGS" | tr -d '[:space:]')
+stale=$(jq -cn '{message:"answer stale question",resolve_keys:["stale-key"]}')
+if rejected=$(printf '%s' "$stale" | "$API" steer owned001 2>/dev/null); then fail 'stale decision key must be refused'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "decision_not_open"' >/dev/null \
+  || fail 'stale decision key is a structured refusal'
+[ "$(wc -l < "$FM_API_TEST_SEND_ARGS" | tr -d '[:space:]')" = "$send_count" ] \
+  || fail 'stale decision key is rejected before sending'
+ordinary=$(printf '%s' '{"message":"Continue with the next safe step."}' | "$API" steer owned001)
+printf '%s\n' "$ordinary" | jq -e '.accepted' >/dev/null \
+  || fail 'ordinary steering remains supported without a decision key'
+pass 'open decision keys are checked while ordinary steering still works'
+
+cancelled=$("$API" cancel owned001)
 printf '%s\n' "$cancelled" | jq -e '.agent_stopped and .task_state_retained and (.semantics | contains("not a durable cancelled state"))' >/dev/null \
-  || fail 'cancel reports only the verified exit semantics'
-pass 'cancel delegates to verified exit without inventing task state'
+  || fail 'cancel preserves its verified-exit-only semantics'
+pass 'owned cancellation delegates without inventing terminal task state'
 
-rejected=$(printf '%s' '{"project":"demo","title":"unsafe","instruction":"no deploy","authority":{"inspect":true,"edit":true,"commit":true,"push":false,"deploy":true}}' \
-  | FM_HOME="$HOME_DIR" "$API" create 2>/dev/null && exit 1 || true)
-printf '%s\n' "$rejected" | jq -e '.error.code == "unsupported_authority"' >/dev/null \
-  || fail 'unsupported deploy authority fails with structured JSON'
-pass 'authority gaps fail closed'
-
-for command in list 'status api-canary-1'; do
-  read -r -a args <<< "$command"
-  if rejected=$(FM_HOME="$HOME_DIR" FM_API_TEST_SNAPSHOT_FAIL=1 "$API" "${args[@]}"); then
-    fail 'snapshot failure must return nonzero'
-  fi
-  printf '%s\n' "$rejected" | jq -se 'length == 1 and .[0].error.code == "snapshot_failed"' >/dev/null \
-    || fail 'snapshot failure returns exactly one original error'
+for bad in \
+  '{"request_id":"authority1","project":"demo","title":"unsafe","instruction":"x","push":true}' \
+  '{"request_id":"authority2","project":"demo","title":"unsafe","instruction":"x","authority":{"push":true,"deploy":true}}' \
+  '{"request_id":"authority3","project":"demo","title":"unsafe","instruction":"x","mode":"no-mistakes"}'; do
+  if rejected=$(printf '%s' "$bad" | "$API" create 2>/dev/null); then fail 'remote authority expansion must be refused'; fi
+  printf '%s\n' "$rejected" | jq -e '.error.code == "unsupported_authority"' >/dev/null \
+    || fail 'authority refusal is structured'
 done
-pass 'list and status preserve snapshot failures'
+outside=$(printf '%s' "$CREATE" | jq -c '.project="unlisted"')
+if rejected=$(printf '%s' "$outside" | "$API" create 2>/dev/null); then fail 'unlisted project must be refused'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "project_not_allowlisted"' >/dev/null \
+  || fail 'project allowlist refusal is structured'
+if rejected=$(printf '%s' "$CREATE"'{"extra":true}' | "$API" create 2>/dev/null); then fail 'multiple JSON values must be refused'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "invalid_input"' >/dev/null \
+  || fail 'multi-value JSON is refused'
+if rejected=$(printf '%s' '{' | "$API" create 2>/dev/null); then fail 'malformed JSON must be refused'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "invalid_input"' >/dev/null \
+  || fail 'malformed JSON is refused'
+pass 'malformed requests, caller authority fields, and unlisted projects fail closed'
 
-for home_mode in default explicit; do
-  if [ "$home_mode" = default ]; then
-    export FM_API_TEST_EXPECT_HOME="$TMP_ROOT"
-    unset FM_HOME FM_ROOT_OVERRIDE
-  else
-    export FM_API_TEST_EXPECT_HOME="$HOME_DIR" FM_HOME="$HOME_DIR"
-  fi
-  steered=$(printf '%s' '{"message":"Continue."}' | FM_API_TEST_SEND_ARGS="$TMP_ROOT/send.args" "$API" steer "$task_id")
-  printf '%s\n' "$steered" | jq -e '.accepted' >/dev/null || fail 'steer inherits resolved home'
-  cancelled=$("$API" cancel "$task_id")
-  printf '%s\n' "$cancelled" | jq -e '.agent_stopped' >/dev/null || fail 'cancel inherits resolved home'
-done
-pass 'lifecycle helpers inherit default and explicit homes'
+PARTIAL=$(jq -cn '{request_id:"partial-0001",project:"demo",title:"partial canary",instruction:"No worker will launch."}')
+if partial=$(printf '%s' "$PARTIAL" | FM_API_TEST_TASK_ID=partial001 FM_API_TEST_SPAWN_FAIL=1 "$API" create 2>/dev/null); then fail 'spawn failure must be reported as uncertain'; fi
+printf '%s\n' "$partial" | jq -e '.error.code == "create_uncertain" and .task_id == "partial001"' >/dev/null \
+  || fail 'partial create returns its task id and uncertainty'
+add_count=$(wc -l < "$FM_API_TEST_ADD_CALLS" | tr -d '[:space:]')
+spawn_count=$(wc -l < "$FM_API_TEST_SPAWN_ARGS" | tr -d '[:space:]')
+reconciled=$(printf '%s' "$PARTIAL" | "$API" create)
+printf '%s\n' "$reconciled" | jq -e '.task_id == "partial001" and .reused and .outcome == "not_retried"' >/dev/null \
+  || fail 'retry after uncertainty reconciles the same task without respawn'
+[ "$(wc -l < "$FM_API_TEST_ADD_CALLS" | tr -d '[:space:]')" = "$add_count" ] \
+  || fail 'uncertain retry cannot create a duplicate task'
+[ "$(wc -l < "$FM_API_TEST_SPAWN_ARGS" | tr -d '[:space:]')" = "$spawn_count" ] \
+  || fail 'uncertain retry cannot relaunch a worker'
+partial_status=$("$API" status partial001)
+printf '%s\n' "$partial_status" | jq -e '.task_id == "partial001" and .state == "queued" and .endpoint_status == "unknown"' >/dev/null \
+  || fail 'status exposes a task when intake succeeded but worker launch was uncertain'
+pass 'partial creation is observable and same-key retries do not duplicate work'
 
-rm -f "$TMP_ROOT/spawn.args"
-for push in true false; do
-  for mode in '""' '"local-only"' '"no-mistakes"' '"direct-PR"'; do
-    request=$(printf '%s' "$CREATE" | jq --argjson push "$push" --argjson mode "$mode" '.authority.commit = false | .authority.push = $push | .mode = $mode')
-    if rejected=$(printf '%s' "$request" | FM_HOME="$HOME_DIR" FM_API_TEST_SPAWN_ARGS="$TMP_ROOT/spawn.args" "$API" create); then
-      fail 'no-commit authority must be refused'
-    fi
-    printf '%s\n' "$rejected" | jq -e '.error.code == "unsupported_authority"' >/dev/null || fail 'no-commit refusal is structured'
-  done
-done
-[ ! -e "$TMP_ROOT/spawn.args" ] || fail 'no-commit authority must not launch'
-pass 'no-commit authority fails closed across push and mode combinations'
+if rejected=$(FM_API_TEST_SNAPSHOT_FAIL=1 "$API" list 2>/dev/null); then fail 'snapshot transport failure must fail'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "snapshot_failed"' >/dev/null \
+  || fail 'snapshot transport failure is structured'
+if rejected=$(FM_API_TEST_CONTROL_FAIL=1 "$API" cancel owned001 2>/dev/null); then fail 'unconfirmed cancellation must fail'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "cancel_unconfirmed" and .task_id == "owned001"' >/dev/null \
+  || fail 'cancel failure identifies the owned task without discarding it'
+pass 'snapshot and lifecycle transport failures remain explicit'
