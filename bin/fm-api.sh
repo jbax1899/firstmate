@@ -311,6 +311,8 @@ case "$COMMAND" in
         [.hints.open_decisions[]?.key] as $open
         | all($keys[]; . as $key | $open | index($key) != null)' >/dev/null 2>&1 \
         || api_error decision_not_open 'A supplied decision key is not open on this owned task; nothing was sent.' "$2"
+    elif [ -n "$TASK" ] && [ "$(printf '%s\n' "$TASK" | jq '(.hints.open_decisions // []) | length')" -gt 0 ]; then
+      api_error decision_key_required 'This task has an open decision; answer it with its current decision key.' "$2"
     fi
     mapfile -t KEYS < <(printf '%s' "$KEY_JSON" | jq -r '.[]')
     SEND_ARGS=("$2")

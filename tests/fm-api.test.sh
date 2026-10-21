@@ -102,11 +102,13 @@ cat > "$SNAPSHOT" <<'DATA'
 {"backlog":{"records":[
   {"id":"owned001","structured":true,"state":"in_flight","repo":"demo","title":"owned task","body_lines":["<!-- fm-api:v1 owner=owner_a request=seed00001 digest=seed -->"]},
   {"id":"foreign001","structured":true,"state":"in_flight","repo":"demo","title":"other session","body_lines":["<!-- fm-api:v1 owner=owner_b request=seed00002 digest=seed -->"]},
+  {"id":"working01","structured":true,"state":"in_flight","repo":"demo","title":"working task","body_lines":["<!-- fm-api:v1 owner=owner_a request=seed00005 digest=seed -->"]},
   {"id":"mismatch01","structured":true,"state":"in_flight","repo":"demo","title":"mismatched project","body_lines":["<!-- fm-api:v1 owner=owner_a request=seed00004 digest=seed -->"]},
   {"id":"doneowned","structured":true,"state":"done","repo":"demo","title":"completed","body_lines":["<!-- fm-api:v1 owner=owner_a request=seed00003 digest=seed -->"]}
 ]},"tasks":[
   {"id":"owned001","project":"demo","kind":"ship","current_state":{"state":"parked","detail":"choose A or B"},"hints":{"pending_decision":true,"open_decisions":[{"key":"choice","verb":"needs-decision","summary":"Choose A or B"}]},"endpoint":{"status":"alive"}},
   {"id":"foreign001","project":"demo","kind":"ship","current_state":{"state":"working","detail":"private work"},"hints":{"pending_decision":false,"open_decisions":[]},"endpoint":{"status":"alive"}},
+  {"id":"working01","project":"demo","kind":"ship","current_state":{"state":"working","detail":"continue safe work"},"hints":{"pending_decision":false,"open_decisions":[]},"endpoint":{"status":"alive"}},
   {"id":"mismatch01","project":"unregistered","kind":"ship","current_state":{"state":"working","detail":"wrong project"},"hints":{"pending_decision":false,"open_decisions":[]},"endpoint":{"status":"alive"}},
   {"id":"doneowned","project":"demo","kind":"ship","current_state":{"state":"done","detail":"finished"},"hints":{"pending_decision":false,"open_decisions":[]},"endpoint":{"status":"absent"}}
 ]}
@@ -151,7 +153,7 @@ status=$("$API" status owned001)
 printf '%s\n' "$status" | jq -e '.task_id == "owned001" and .state == "needs-user" and .needs_user and .open_decisions[0].key == "choice" and .result == "canary result\n"' >/dev/null \
   || fail 'status exposes only the owned task decision and bounded result'
 listed=$("$API" list)
-printf '%s\n' "$listed" | jq -e '.tasks | length == 1 and .[0].task_id == "owned001"' >/dev/null \
+printf '%s\n' "$listed" | jq -e '[.tasks[].task_id] | sort == ["owned001","working01"]' >/dev/null \
   || fail 'list filters foreign and terminal tasks'
 pass 'status and list are scoped to the configured caller owner'
 
@@ -184,10 +186,17 @@ printf '%s\n' "$rejected" | jq -e '.error.code == "decision_not_open"' >/dev/nul
   || fail 'stale decision key is a structured refusal'
 [ "$(wc -l < "$FM_API_TEST_SEND_ARGS" | tr -d '[:space:]')" = "$send_count" ] \
   || fail 'stale decision key is rejected before sending'
-ordinary=$(printf '%s' '{"message":"Continue with the next safe step."}' | "$API" steer owned001)
-printf '%s\n' "$ordinary" | jq -e '.accepted' >/dev/null \
-  || fail 'ordinary steering remains supported without a decision key'
-pass 'open decision keys are checked while ordinary steering still works'
+if rejected=$(printf '%s' '{"message":"Use option B."}' | "$API" steer owned001 2>/dev/null); then
+  fail 'unkeyed steering must not answer a task with an open decision'
+fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "decision_key_required"' >/dev/null \
+  || fail 'open decision requires its key'
+[ "$(wc -l < "$FM_API_TEST_SEND_ARGS" | tr -d '[:space:]')" = "$send_count" ] \
+  || fail 'unkeyed decision answer is rejected before sending'
+ordinary=$(printf '%s' '{"message":"Continue with the next safe step."}' | "$API" steer working01)
+printf '%s\n' "$ordinary" | jq -e '.accepted and .task_id == "working01"' >/dev/null \
+  || fail 'ordinary steering remains supported when no decision is open'
+pass 'decision answers require a current key while ordinary steering remains available'
 
 cancelled=$("$API" cancel owned001)
 printf '%s\n' "$cancelled" | jq -e '.agent_stopped and .task_state_retained and (.semantics | contains("not a durable cancelled state"))' >/dev/null \
