@@ -243,9 +243,16 @@ case "$COMMAND" in
       || api_error internal_error 'Could not fingerprint the create request.'
     MARKER="<!-- fm-api:v1 owner=$OWNER request=$REQUEST_ID digest=$PAYLOAD_HASH -->"
     MARKER_PREFIX="<!-- fm-api:v1 owner=$OWNER request=$REQUEST_ID "
-    EXISTING=$(printf '%s\n' "$SNAPSHOT" | jq -c --arg prefix "$MARKER_PREFIX" '
-      [.backlog.records[]? | select(.structured == true and any(.body_lines[]?; startswith($prefix)))
-       | {task_id:.id,marker:([.body_lines[] | select(startswith($prefix))][0])}] | .[0] // empty' 2>/dev/null || true)
+    printf '%s\n' "$SNAPSHOT" | jq -e '.backlog.records | type == "array"' >/dev/null 2>&1 \
+      || api_error snapshot_invalid 'Firstmate returned an invalid create snapshot.'
+    EXISTING_ROWS=$(printf '%s\n' "$SNAPSHOT" | jq -c --arg prefix "$MARKER_PREFIX" '
+      [.backlog.records[] | select(.structured == true and any(.body_lines[]?; startswith($prefix)))
+       | {task_id:.id,marker:([.body_lines[] | select(startswith($prefix))][0])}]' 2>/dev/null) \
+      || api_error snapshot_invalid 'Firstmate returned an invalid create snapshot.'
+    EXISTING_COUNT=$(printf '%s\n' "$EXISTING_ROWS" | jq -r 'length')
+    [ "$EXISTING_COUNT" -le 1 ] \
+      || api_error create_uncertain 'Multiple tasks carry this owner/request marker; reconcile Firstmate state before retrying.'
+    EXISTING=$(printf '%s\n' "$EXISTING_ROWS" | jq -c '.[0] // empty')
     if [ -n "$EXISTING" ]; then
       EXISTING_ID=$(printf '%s\n' "$EXISTING" | jq -r '.task_id')
       EXISTING_MARKER=$(printf '%s\n' "$EXISTING" | jq -r '.marker')
