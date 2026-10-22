@@ -143,6 +143,36 @@ printf '%s\n' "$duplicate" | jq -e '.reused and (.created == false) and .outcome
   || fail 'duplicate create does not spawn a second worker'
 pass 'same request id is idempotent and never launches twice'
 
+DUPLICATE_SNAPSHOT=$(jq -c --arg duplicate_id dupe0001 '
+  .backlog.records += [
+    (.backlog.records[] | select(.id == "created001") | . + {id:$duplicate_id})
+  ]' "$SNAPSHOT")
+printf '%s\n' "$DUPLICATE_SNAPSHOT" > "$SNAPSHOT"
+add_count=$(wc -l < "$FM_API_TEST_ADD_CALLS" | tr -d '[:space:]')
+spawn_count=$(wc -l < "$FM_API_TEST_SPAWN_ARGS" | tr -d '[:space:]')
+if rejected=$(printf '%s' "$CREATE" | "$API" create 2>/dev/null); then fail 'ambiguous request markers must not select one task'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "create_uncertain" and .task_id == null' >/dev/null \
+  || fail 'duplicate request markers are an explicit uncertain result'
+[ "$(wc -l < "$FM_API_TEST_ADD_CALLS" | tr -d '[:space:]')" = "$add_count" ] \
+  || fail 'ambiguous request markers do not add another task'
+[ "$(wc -l < "$FM_API_TEST_SPAWN_ARGS" | tr -d '[:space:]')" = "$spawn_count" ] \
+  || fail 'ambiguous request markers do not spawn another worker'
+jq ' .backlog.records |= map(select(.id != "dupe0001"))' "$SNAPSHOT" > "$SNAPSHOT.tmp"
+mv "$SNAPSHOT.tmp" "$SNAPSHOT"
+pass 'duplicate matching markers fail closed without creating or spawning'
+
+SNAPSHOT_VALID="$TMP_ROOT/snapshot.valid"
+cp "$SNAPSHOT" "$SNAPSHOT_VALID"
+printf '{' > "$SNAPSHOT"
+add_count=$(wc -l < "$FM_API_TEST_ADD_CALLS" | tr -d '[:space:]')
+if rejected=$(printf '%s' "$CREATE" | "$API" create 2>/dev/null); then fail 'malformed create snapshots must fail closed'; fi
+printf '%s\n' "$rejected" | jq -e '.error.code == "snapshot_invalid"' >/dev/null \
+  || fail 'malformed create snapshots return a structured error'
+[ "$(wc -l < "$FM_API_TEST_ADD_CALLS" | tr -d '[:space:]')" = "$add_count" ] \
+  || fail 'malformed create snapshots do not create a task'
+mv "$SNAPSHOT_VALID" "$SNAPSHOT"
+pass 'malformed create snapshots cannot masquerade as an unseen request'
+
 changed=$(printf '%s' "$CREATE" | jq -c '.title = "different payload"')
 if rejected=$(printf '%s' "$changed" | "$API" create 2>/dev/null); then fail 'changed payload must conflict with an existing request id'; fi
 printf '%s\n' "$rejected" | jq -e '.error.code == "idempotency_conflict" and .task_id == "created001"' >/dev/null \
