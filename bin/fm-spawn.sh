@@ -5,7 +5,7 @@
 #        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --codex-appserver selects the machine-supervised transport for one fresh
-#   --harness codex ship/scout. Linux, Codex 0.156.1 and python3 are required.
+#   --harness codex ship/scout. Linux, Codex 0.156.1 or 0.163.0 and python3 are required.
 #   It retains the selected terminal endpoint/worktree provider, grants only
 #   the isolated worker workspace, and reports through client-owned tools.
 #   Interactive Codex, secondmates, batch launch, and relaunch are unchanged.
@@ -801,10 +801,17 @@ if [ "$CODEX_APPSERVER" = 1 ]; then
     echo "error: --codex-appserver requires one fresh ship/scout and explicit --harness codex" >&2
     exit 1
   fi
-  if [ "$(uname)" != Linux ] || [ "$(codex --version)" != 'codex-cli 0.156.1' ] || ! command -v python3 >/dev/null; then
-    echo "error: app-server transport is verified only on Linux with Codex 0.156.1 and python3" >&2
+  if [ "$(uname)" != Linux ] || ! command -v python3 >/dev/null; then
+    echo "error: app-server transport is verified only on Linux with python3" >&2
     exit 1
   fi
+  case "$(codex --version 2>/dev/null)" in
+    'codex-cli 0.156.1'|'codex-cli 0.163.0') ;;
+    *)
+      echo "error: app-server transport is verified only with Codex 0.156.1 or 0.163.0" >&2
+      exit 1
+      ;;
+  esac
 fi
 [ -z "$want_value" ] || {
   echo "error: --$want_value requires a value" >&2
